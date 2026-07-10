@@ -44,7 +44,7 @@ app.get('/api/me', (req, res) => {
 
 // ── Sessions (list / open / save) ──────────────────────────────────────────
 
-// List sessions. Admin sees all; expert sees those assigned to them (or unassigned).
+// List sessions. Admin sees all; experts see only sessions assigned to them.
 app.get('/api/sessions', requireAuth, wrap(async (req, res) => {
   let rows;
   if (req.user.role === 'admin') {
@@ -59,7 +59,7 @@ app.get('/api/sessions', requireAuth, wrap(async (req, res) => {
              jsonb_array_length(transcript) AS turn_count,
              updated_at
       FROM sessions
-      WHERE assigned_to = ${req.user.username} OR assigned_to IS NULL
+      WHERE assigned_to = ${req.user.username}
       ORDER BY updated_at DESC`;
   }
   res.json(rows);
@@ -70,7 +70,7 @@ app.get('/api/sessions/:id', requireAuth, wrap(async (req, res) => {
   const rows = await sql`SELECT * FROM sessions WHERE id = ${req.params.id}`;
   const s = rows[0];
   if (!s) return res.status(404).json({ error: 'Not found' });
-  if (req.user.role !== 'admin' && s.assigned_to && s.assigned_to !== req.user.username) {
+  if (req.user.role !== 'admin' && s.assigned_to !== req.user.username) {
     return res.status(403).json({ error: 'Not assigned to you' });
   }
   res.json({
@@ -86,7 +86,7 @@ app.put('/api/sessions/:id', requireAuth, wrap(async (req, res) => {
   const rows = await sql`SELECT assigned_to FROM sessions WHERE id = ${req.params.id}`;
   const s = rows[0];
   if (!s) return res.status(404).json({ error: 'Not found' });
-  if (req.user.role !== 'admin' && s.assigned_to && s.assigned_to !== req.user.username) {
+  if (req.user.role !== 'admin' && s.assigned_to !== req.user.username) {
     return res.status(403).json({ error: 'Not assigned to you' });
   }
   const validStatus = ['not started', 'in progress', 'done'].includes(status) ? status : 'in progress';
@@ -139,9 +139,12 @@ app.put('/api/admin/sessions/:id/assign', requireAdmin, wrap(async (req, res) =>
   res.json({ ok: true });
 }));
 
-// List experts (for the assignment dropdown).
+// List assignable users for the assignment dropdown: experts plus the current admin.
 app.get('/api/admin/experts', requireAdmin, wrap(async (_req, res) => {
-  const rows = await sql`SELECT username FROM users WHERE role = 'expert' ORDER BY username`;
+  const rows = await sql`
+    SELECT username FROM users
+    WHERE role = 'expert' OR username = ${_req.user.username}
+    ORDER BY CASE WHEN username = ${_req.user.username} THEN 0 ELSE 1 END, username`;
   res.json(rows.map(r => r.username));
 }));
 

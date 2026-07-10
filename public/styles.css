@@ -130,6 +130,21 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
   width: 240px; flex-shrink: 0; border-right: 1px solid var(--border);
   background: var(--surface-1); display: flex; flex-direction: column;
 }
+.resize-handle {
+  width: 7px; flex-shrink: 0; cursor: col-resize;
+  background: var(--surface-1); border-right: 1px solid var(--border);
+  position: relative;
+}
+.resize-handle::after {
+  content: ""; position: absolute; top: 50%; left: 3px;
+  width: 1px; height: 42px; transform: translateY(-50%);
+  background: var(--border-strong); opacity: 0;
+}
+.resize-handle:hover::after,
+.resizing-panel .resize-handle::after { opacity: 1; }
+.resizing-panel { cursor: col-resize; user-select: none; }
+.resizing-panel iframe,
+.resizing-panel * { cursor: col-resize !important; }
 .panel-right {
   width: 270px; flex-shrink: 0; border-left: 1px solid var(--border);
   background: var(--surface-1); display: flex; flex-direction: column;

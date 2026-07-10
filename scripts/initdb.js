@@ -12,7 +12,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 async function run() {
   const raw = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
   for (const stmt of splitStatements(raw)) {
-    await sql.query(stmt);
+    if (typeof sql.query === 'function') {
+      await sql.query(stmt);
+    } else {
+      await sql(stmt, []);
+    }
   }
   console.log('Schema applied.');
 

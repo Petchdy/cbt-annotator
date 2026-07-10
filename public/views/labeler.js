@@ -66,6 +66,7 @@ export async function renderLabeler(root, sessionId) {
         <div class="panel-head">Transcript</div>
         <div class="transcript-scroll" id="transcript"></div>
       </div>
+      <div class="resize-handle" id="leftresize" title="Resize transcript panel"></div>
       <div class="viewport" id="viewport">
         <div class="world" id="world">
           <svg class="edge-svg" id="edgesvg"></svg>
@@ -93,6 +94,32 @@ export async function renderLabeler(root, sessionId) {
   const world = q('#world');
   const canvas = q('#canvas');
   const svg = q('#edgesvg');
+  const leftPanel = q('.panel-left');
+  const leftResize = q('#leftresize');
+
+  const savedLeftWidth = Number(localStorage.getItem('cbt:leftPanelWidth'));
+  if (Number.isFinite(savedLeftWidth)) {
+    leftPanel.style.width = `${Math.min(520, Math.max(160, savedLeftWidth))}px`;
+  }
+  leftResize.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = leftPanel.getBoundingClientRect().width;
+    document.body.classList.add('resizing-panel');
+    const move = (ev) => {
+      const next = Math.min(520, Math.max(160, startWidth + ev.clientX - startX));
+      leftPanel.style.width = `${Math.round(next)}px`;
+    };
+    const up = () => {
+      document.body.classList.remove('resizing-panel');
+      localStorage.setItem('cbt:leftPanelWidth', String(Math.round(leftPanel.getBoundingClientRect().width)));
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
 
   // ── Save / dirty ──────────────────────────────────────────────────────────
   function updateSaveState() {
