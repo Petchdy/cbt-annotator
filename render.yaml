@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: cbt-annotator
+    runtime: node
+    plan: free            # free sleeps after 15 min idle (~30s cold start). Upgrade to 'starter' to remove.
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        sync: false        # paste your Neon connection string in the Render dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_USER
+        sync: false
+      - key: ADMIN_PASS
+        sync: false
+      - key: EXPERT_USER
+        sync: false
+      - key: EXPERT_PASS
+        sync: false

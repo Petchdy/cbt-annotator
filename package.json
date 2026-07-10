@@ -1,0 +1,23 @@
+{
+  "name": "cbt-annotator",
+  "version": "1.0.0",
+  "description": "CBT knowledge-graph annotation platform (transcript + free-drag canvas + ontology-constrained labelling)",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "seed": "node scripts/seed.js",
+    "initdb": "node scripts/initdb.js",
+    "test": "node test/ontology.mjs && node test/frontcheck.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "pg": "^8.22.0"
+  }
+}
