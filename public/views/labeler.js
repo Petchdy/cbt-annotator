@@ -63,7 +63,10 @@ export async function renderLabeler(root, sessionId) {
     </div>
     <div class="labeler-body">
       <div class="panel-left">
-        <div class="panel-head">Transcript</div>
+        <div class="panel-head">
+          <span>Transcript</span>
+          <button class="small" id="readtranscript">Read</button>
+        </div>
         <div class="transcript-scroll" id="transcript"></div>
       </div>
       <div class="resize-handle" id="leftresize" title="Resize transcript panel"></div>
@@ -131,17 +134,18 @@ export async function renderLabeler(root, sessionId) {
     // strip UI-only helper fields (_eid) before persisting the graph
     const cleanEdges = model.edges.map(({ _eid, ...rest }) => rest);
     await api.put(`/api/sessions/${sessionId}`, {
-      annotation: { nodes: model.nodes, edges: cleanEdges },
+      annotation: { nodes: model.nodes.map(normalizeNodeForSave), edges: cleanEdges },
       ui_state: ui,
       status,
     });
     dirty = false; updateSaveState();
   }
   q('#save').onclick = () => save().catch(e => alert('Save failed: ' + e.message));
+  q('#readtranscript').onclick = () => openTranscriptModal(root, data.title, data.transcript);
   q('#status').onchange = (e) => { status = e.target.value; markDirty(); };
   q('#export').onclick = () => {
     const cleanEdges = model.edges.map(({ _eid, ...rest }) => rest);
-    const blob = new Blob([JSON.stringify({ nodes: model.nodes, edges: cleanEdges }, null, 2)],
+    const blob = new Blob([JSON.stringify({ nodes: model.nodes.map(normalizeNodeForSave), edges: cleanEdges }, null, 2)],
       { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -203,6 +207,25 @@ export async function renderLabeler(root, sessionId) {
   function caption(n) {
     const f = CAPTION_FIELD[n.label];
     return (n.properties && n.properties[f]) || `(new ${n.label})`;
+  }
+
+  function propValues(val) {
+    if (Array.isArray(val)) return val;
+    if (val === undefined || val === null || val === '') return [];
+    return [val];
+  }
+
+  function propMatchesShowIf(props, showIf) {
+    const val = props[showIf.key];
+    return Array.isArray(val) ? val.includes(showIf.equals) : val === showIf.equals;
+  }
+
+  function normalizeNodeForSave(n) {
+    const properties = { ...(n.properties || {}) };
+    for (const f of CLASS_PROPS[n.label] || []) {
+      if (f.kind === 'multi-enum') properties[f.key] = propValues(properties[f.key]);
+    }
+    return { ...n, properties };
   }
 
   // ── Transcript ────────────────────────────────────────────────────────────
@@ -381,7 +404,7 @@ export async function renderLabeler(root, sessionId) {
       const props = CLASS_PROPS[n.label] || [];
       n.properties = n.properties || {};
       let fieldsHtml = props.map(f => {
-        if (f.showIf && n.properties[f.showIf.key] !== f.showIf.equals) return '';
+        if (f.showIf && !propMatchesShowIf(n.properties, f.showIf)) return '';
         return `<div class="field-block">${propControl(f, n.properties[f.key])}</div>`;
       }).join('');
 
@@ -426,6 +449,7 @@ export async function renderLabeler(root, sessionId) {
 
       // wire property controls
       props.forEach(f => {
+        if (f.kind === 'multi-enum') return;
         const input = body.querySelector(`[data-prop="${f.key}"]`);
         if (!input) return;
         input.onchange = () => {
@@ -437,6 +461,37 @@ export async function renderLabeler(root, sessionId) {
         };
         if (f.kind === 'text') input.oninput = () => { n.properties[f.key] = input.value; markDirty(); };
       });
+      body.querySelectorAll('.multi-enum').forEach(box => {
+        const key = box.dataset.prop;
+        const field = props.find(f => f.key === key);
+        const btn = box.querySelector('.multi-enum-button');
+        const menu = box.querySelector('.multi-enum-menu');
+        const updateLabel = () => {
+          const selected = propValues(n.properties[key]);
+          btn.textContent = selected.length ? selected.join(', ') : `-- select ${field.label.toLowerCase()} --`;
+        };
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          body.querySelectorAll('.multi-enum.open').forEach(other => {
+            if (other !== box) other.classList.remove('open');
+          });
+          box.classList.toggle('open');
+        };
+        menu.onclick = (e) => e.stopPropagation();
+        menu.querySelectorAll('input[type="checkbox"]').forEach(input => {
+          input.onchange = (e) => {
+            e.stopPropagation();
+            n.properties[key] = [...menu.querySelectorAll('input:checked')].map(x => x.value);
+            updateLabel();
+            markDirty();
+            renderCanvas();
+          };
+        });
+        updateLabel();
+      });
+      document.addEventListener('click', () => {
+        body.querySelectorAll('.multi-enum.open').forEach(box => box.classList.remove('open'));
+      }, { once: true });
 
       q('#pback').onclick = () => { selected = null; panelMode = 'coverage'; evidenceMode = false; renderAll(); };
       q('#delnode').onclick = () => {
@@ -510,6 +565,20 @@ export async function renderLabeler(root, sessionId) {
           ${f.options.map(o => `<option ${val === o ? 'selected' : ''}>${o}</option>`).join('')}
         </select>`;
     }
+    if (f.kind === 'multi-enum') {
+      const selected = new Set(propValues(val));
+      const display = selected.size ? [...selected].join(', ') : `-- select ${f.label.toLowerCase()} --`;
+      return `<label>${f.label}${f.optional ? ' <span class="muted">(optional)</span>' : ''}</label>
+        <div class="multi-enum" data-prop="${f.key}">
+          <button type="button" class="multi-enum-button">${escapeHtml(display)}</button>
+          <div class="multi-enum-menu">
+            ${f.options.map(o => `<label class="multi-enum-option">
+              <input type="checkbox" value="${escapeAttr(o)}" ${selected.has(o) ? 'checked' : ''}/>
+              <span>${escapeHtml(o)}</span>
+            </label>`).join('')}
+          </div>
+        </div>`;
+    }
     // text
     const long = ['content', 'description', 'statement', 'taskDescription', 'context'].includes(f.key);
     return `<label>${f.label}${f.optional ? ' <span class="muted">(optional)</span>' : ''}</label>` +
@@ -535,6 +604,37 @@ function escapeHtml(s) {
 }
 function escapeAttr(s) {
   return String(s ?? '').replace(/"/g, '&quot;');
+}
+function openTranscriptModal(root, title, transcript) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay transcript-modal-overlay';
+  overlay.innerHTML = `
+    <div class="transcript-modal" role="dialog" aria-modal="true" aria-label="Transcript read mode">
+      <div class="transcript-modal-head">
+        <div>
+          <h3>${escapeHtml(title)}</h3>
+          <div class="muted">${transcript.length} turns</div>
+        </div>
+        <button id="tclose">Close</button>
+      </div>
+      <div class="transcript-reader">
+        ${transcript.map((t, i) => `
+          <article class="reader-turn">
+            <div class="reader-meta">Turn ${i + 1} · ${escapeHtml(t.speaker || 'unknown')}</div>
+            <p>${escapeHtml(t.text || '')}</p>
+          </article>`).join('')}
+      </div>
+    </div>`;
+  root.appendChild(overlay);
+
+  const close = () => {
+    window.removeEventListener('keydown', onKey);
+    overlay.remove();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#tclose').onclick = close;
+  window.addEventListener('keydown', onKey);
 }
 function confirmLeave(root, onSave, onDiscard) {
   const overlay = document.createElement('div');

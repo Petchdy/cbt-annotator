@@ -22,7 +22,9 @@ for (const c of NODE_CLASSES) {
   const keys = new Set(CLASS_PROPS[c].map(p => p.key));
   for (const p of CLASS_PROPS[c]) {
     if (p.showIf) check(`${c}.${p.key} showIf references real key`, keys.has(p.showIf.key));
-    if (p.kind === 'enum') check(`${c}.${p.key} enum has options`, Array.isArray(p.options) && p.options.length > 0);
+    if (p.kind === 'enum' || p.kind === 'multi-enum') {
+      check(`${c}.${p.key} ${p.kind} has options`, Array.isArray(p.options) && p.options.length > 0);
+    }
   }
 }
 

@@ -35,13 +35,13 @@ export const NODE_CLASSES = [
   'AutomaticThought', 'Reaction', 'AdaptiveResponse',
 ];
 
-// Field kinds: 'text' (freeform), 'enum' (dropdown), 'bool' (checkbox).
+// Field kinds: 'text' (freeform), 'enum' (dropdown), 'multi-enum' (multi-select dropdown), 'bool' (checkbox).
 // `showIf` makes a field conditional on a sibling property value.
 // `optional` marks non-required fields.
 export const CLASS_PROPS = {
   Problem: [
     { key: 'description', kind: 'text', label: 'Description' },
-    { key: 'domain', kind: 'enum', label: 'Domain',
+    { key: 'domain', kind: 'multi-enum', label: 'Domains',
       options: ['academic','work','social','family','financial','health','personal','other'] },
     { key: 'derived', kind: 'bool', label: 'Derived (inferred, not stated)', optional: true },
   ],
