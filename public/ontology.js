@@ -82,7 +82,8 @@ export const CLASS_PROPS = {
     { key: 'description', kind: 'text', label: 'Description (minimal trigger)' },
     { key: 'context', kind: 'text', label: 'Context (elaboration)', optional: true },
     { key: 'kind', kind: 'enum', label: 'Kind (trigger channel)', options: [
-      'externalSituation','thoughtStream','image','emotion','behavior','physiological' ] },
+      'externalSituation','thoughtStream','visual','auditory','smell','taste','touch',
+      'emotion','behavior','physiological' ] },
     { key: 'temporality', kind: 'enum', label: 'Temporality', optional: true,
       options: ['past','present','anticipated'] },
   ],

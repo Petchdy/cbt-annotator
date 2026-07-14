@@ -65,7 +65,7 @@ export async function renderLabeler(root, sessionId) {
       <div class="panel-left">
         <div class="panel-head">
           <span>Transcript</span>
-          <button class="small" id="readtranscript">Read</button>
+          <button class="read-btn" id="readtranscript">Read</button>
         </div>
         <div class="transcript-scroll" id="transcript"></div>
       </div>
@@ -399,7 +399,7 @@ export async function renderLabeler(root, sessionId) {
       if (!n) { panelMode = 'coverage'; selected = null; return renderInspector(); }
       head.innerHTML = `<span class="row" style="gap:8px">
           <button class="icon-btn" id="pback">←</button>${n.label}</span>
-        <button class="icon-btn danger" id="delnode" title="Delete node">🗑</button>`;
+        <button class="delete-node-btn" id="delnode" title="Delete node">Delete</button>`;
 
       const props = CLASS_PROPS[n.label] || [];
       n.properties = n.properties || {};
