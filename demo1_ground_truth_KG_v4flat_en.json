@@ -1,0 +1,964 @@
+{
+ "meta": {
+  "schema_version": "ontology_v4_flat",
+  "transcript": "demo1_transcript.json",
+  "language": "english",
+  "session_type": "therapy",
+  "n_turns": 45,
+  "speaker_enum": [
+   "therapist",
+   "client"
+  ],
+  "generated_by": "manual gold annotation (ground truth) — NOT pipeline output",
+  "gold_notes": [
+   "Two CoreBeliefs: cb_1 worthless (turn 11), cb_2 unlovable (turn 1 + turn 12). Turn 13 disavowal is expected, does not negate.",
+   "stemsFrom split: at_1..at_3 → cb_2 (unlovable); at_4/at_5/at_7 → cb_1 (worthless).",
+   "at_8 has no stemsFrom — driven by rule ib_3, not a core belief.",
+   "react_3 shared by at_7 and at_8.",
+   "Reaction.valence omitted — lexicon-derived post-hoc, not in raw KG output.",
+   "reinforces + influencesPerceptionOf are Stage-3 wide-window; per-turn pipeline not expected to emit them.",
+   "associatedWith absent — full Problem→Situation→AT chain present (fallback-only).",
+   "derived=false everywhere — all nodes client-stated, nothing inferred.",
+   "This file is the ENGLISH content variant; node ids/edges/evidence are identical across the two language files."
+  ]
+ },
+ "tbox_nodes": [
+  {
+   "id": "tbox_OWL_Thing",
+   "label": "TBox",
+   "name": "OWL_Thing"
+  },
+  {
+   "id": "tbox_Provenance",
+   "label": "TBox",
+   "name": "Provenance"
+  },
+  {
+   "id": "tbox_Utterance",
+   "label": "TBox",
+   "name": "Utterance"
+  },
+  {
+   "id": "tbox_SessionStructure",
+   "label": "TBox",
+   "name": "SessionStructure"
+  },
+  {
+   "id": "tbox_Session",
+   "label": "TBox",
+   "name": "Session"
+  },
+  {
+   "id": "tbox_Client",
+   "label": "TBox",
+   "name": "Client"
+  },
+  {
+   "id": "tbox_Problem",
+   "label": "TBox",
+   "name": "Problem"
+  },
+  {
+   "id": "tbox_Goal",
+   "label": "TBox",
+   "name": "Goal"
+  },
+  {
+   "id": "tbox_Intervention",
+   "label": "TBox",
+   "name": "Intervention"
+  },
+  {
+   "id": "tbox_Homework",
+   "label": "TBox",
+   "name": "Homework"
+  },
+  {
+   "id": "tbox_CognitiveModel",
+   "label": "TBox",
+   "name": "CognitiveModel"
+  },
+  {
+   "id": "tbox_CoreBelief",
+   "label": "TBox",
+   "name": "CoreBelief"
+  },
+  {
+   "id": "tbox_IntermediateBelief",
+   "label": "TBox",
+   "name": "IntermediateBelief"
+  },
+  {
+   "id": "tbox_Situation",
+   "label": "TBox",
+   "name": "Situation"
+  },
+  {
+   "id": "tbox_AutomaticThought",
+   "label": "TBox",
+   "name": "AutomaticThought"
+  },
+  {
+   "id": "tbox_Reaction",
+   "label": "TBox",
+   "name": "Reaction"
+  },
+  {
+   "id": "tbox_AdaptiveResponse",
+   "label": "TBox",
+   "name": "AdaptiveResponse"
+  }
+ ],
+ "tbox_edges": [
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Provenance",
+   "to": "tbox_OWL_Thing"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Utterance",
+   "to": "tbox_Provenance"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_SessionStructure",
+   "to": "tbox_OWL_Thing"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Session",
+   "to": "tbox_SessionStructure"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Client",
+   "to": "tbox_OWL_Thing"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Problem",
+   "to": "tbox_SessionStructure"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Goal",
+   "to": "tbox_SessionStructure"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Intervention",
+   "to": "tbox_SessionStructure"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Homework",
+   "to": "tbox_SessionStructure"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_CognitiveModel",
+   "to": "tbox_OWL_Thing"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_CoreBelief",
+   "to": "tbox_CognitiveModel"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_IntermediateBelief",
+   "to": "tbox_CognitiveModel"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Situation",
+   "to": "tbox_CognitiveModel"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_AutomaticThought",
+   "to": "tbox_CognitiveModel"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_Reaction",
+   "to": "tbox_CognitiveModel"
+  },
+  {
+   "type": "SUB_CLASS_OF",
+   "from": "tbox_AdaptiveResponse",
+   "to": "tbox_CognitiveModel"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "client_1",
+   "label": "Client",
+   "parent": null,
+   "properties": {},
+   "evidence": []
+  },
+  {
+   "id": "session_1",
+   "label": "Session",
+   "parent": null,
+   "properties": {
+    "sessionType": "therapy"
+   },
+   "evidence": []
+  },
+  {
+   "id": "cb_1",
+   "label": "CoreBelief",
+   "parent": null,
+   "properties": {
+    "content": "I'm worthless and I'm a waste of time",
+    "domain": "self",
+    "category": "worthless",
+    "derived": false
+   },
+   "evidence": [
+    11,
+    12
+   ]
+  },
+  {
+   "id": "cb_2",
+   "label": "CoreBelief",
+   "parent": null,
+   "properties": {
+    "content": "I'm not capable of being loved / I'm undeserving of love",
+    "domain": "self",
+    "category": "unlovable",
+    "derived": false
+   },
+   "evidence": [
+    1,
+    12
+   ]
+  },
+  {
+   "id": "ib_1",
+   "label": "IntermediateBelief",
+   "parent": null,
+   "properties": {
+    "content": "I must only date someone below my league so they won't figure out I'm worthless",
+    "subtype": "rule"
+   },
+   "evidence": [
+    15,
+    17
+   ]
+  },
+  {
+   "id": "ib_2",
+   "label": "IntermediateBelief",
+   "parent": null,
+   "properties": {
+    "content": "I must constantly show off my worth (house, job, friends) to prove I'm not worthless",
+    "subtype": "rule"
+   },
+   "evidence": [
+    17
+   ]
+  },
+  {
+   "id": "ib_3",
+   "label": "IntermediateBelief",
+   "parent": null,
+   "properties": {
+    "content": "I must always make sure the other person is happy with our interaction and never ask anything for myself",
+    "subtype": "rule"
+   },
+   "evidence": [
+    19,
+    20
+   ]
+  },
+  {
+   "id": "sit_1",
+   "label": "Situation",
+   "parent": null,
+   "properties": {
+    "description": "Recently broke up with long-term partner; seeing friends and family in relationships, having kids, posting pictures",
+    "kind": "externalSituation",
+    "temporality": "past"
+   },
+   "evidence": [
+    1,
+    3
+   ]
+  },
+  {
+   "id": "sit_2",
+   "label": "Situation",
+   "parent": null,
+   "properties": {
+    "description": "Anticipated conversation with 10-year friend: sharing own problem without asking how he is",
+    "kind": "externalSituation",
+    "temporality": "anticipated"
+   },
+   "evidence": [
+    24,
+    26
+   ]
+  },
+  {
+   "id": "at_1",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "I will never find somebody who loves me",
+    "modality": "verbal",
+    "distortionType": "fortuneTelling"
+   },
+   "evidence": [
+    1,
+    2
+   ]
+  },
+  {
+   "id": "at_2",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "I will be alone / I am alone",
+    "modality": "verbal",
+    "distortionType": "fortuneTelling"
+   },
+   "evidence": [
+    3,
+    4
+   ]
+  },
+  {
+   "id": "at_3",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "People don't want to be with me",
+    "modality": "verbal",
+    "distortionType": "mindReading"
+   },
+   "evidence": [
+    5,
+    6
+   ]
+  },
+  {
+   "id": "at_4",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "There's something wrong with me",
+    "modality": "verbal",
+    "distortionType": "labeling"
+   },
+   "evidence": [
+    7,
+    8
+   ]
+  },
+  {
+   "id": "at_5",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "I haven't done a good job becoming somebody that people want to be around",
+    "modality": "verbal",
+    "distortionType": "labeling"
+   },
+   "evidence": [
+    9,
+    10
+   ]
+  },
+  {
+   "id": "at_6",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "I think it will go fine",
+    "modality": "verbal",
+    "distortionType": "none"
+   },
+   "evidence": [
+    27
+   ]
+  },
+  {
+   "id": "at_7",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "He'll have an inner judgment — Kyle is selfish, he didn't even ask about me",
+    "modality": "verbal",
+    "distortionType": "mindReading"
+   },
+   "evidence": [
+    28,
+    29,
+    31
+   ]
+  },
+  {
+   "id": "at_8",
+   "label": "AutomaticThought",
+   "parent": null,
+   "properties": {
+    "content": "I might slip up and start asking how he is and flip back to taking care of him",
+    "modality": "verbal",
+    "distortionType": "fortuneTelling"
+   },
+   "evidence": [
+    35
+   ]
+  },
+  {
+   "id": "react_1",
+   "label": "Reaction",
+   "parent": null,
+   "properties": {
+    "content": "my depression is through the roof",
+    "channel_hint": "emotional",
+    "channel": "emotional"
+   },
+   "evidence": [
+    1
+   ]
+  },
+  {
+   "id": "react_2",
+   "label": "Reaction",
+   "parent": null,
+   "properties": {
+    "content": "lonely / alone",
+    "channel_hint": "emotional",
+    "channel": "emotional"
+   },
+   "evidence": [
+    3
+   ]
+  },
+  {
+   "id": "react_3",
+   "label": "Reaction",
+   "parent": null,
+   "properties": {
+    "content": "feeling icky / uncomfortable holding the discomfort during the experiment",
+    "channel_hint": "emotional",
+    "channel": "emotional"
+   },
+   "evidence": [
+    34,
+    35,
+    36
+   ]
+  },
+  {
+   "id": "prob_1",
+   "label": "Problem",
+   "parent": null,
+   "properties": {
+    "description": "depression",
+    "domain": "health",
+    "derived": false
+   },
+   "evidence": [
+    1
+   ]
+  },
+  {
+   "id": "prob_2",
+   "label": "Problem",
+   "parent": null,
+   "properties": {
+    "description": "loneliness and inability to find someone who loves him",
+    "domain": "social",
+    "derived": false
+   },
+   "evidence": [
+    1,
+    3,
+    5
+   ]
+  },
+  {
+   "id": "prob_3",
+   "label": "Problem",
+   "parent": null,
+   "properties": {
+    "description": "always taking care of others' needs first and never expressing his own",
+    "domain": "social",
+    "derived": false
+   },
+   "evidence": [
+    18,
+    19,
+    20
+   ]
+  },
+  {
+   "id": "goal_1",
+   "label": "Goal",
+   "parent": null,
+   "properties": {
+    "statement": "Be able to express own needs and receive support without reverting to caretaking"
+   },
+   "evidence": [
+    20,
+    44
+   ]
+  },
+  {
+   "id": "intv_1",
+   "label": "Intervention",
+   "parent": null,
+   "properties": {
+    "description": "Downward-arrow laddering to surface core beliefs from the presenting automatic thought",
+    "technique": "other",
+    "techniqueLabel": "laddering"
+   },
+   "evidence": [
+    2,
+    4,
+    6,
+    8,
+    10,
+    12
+   ]
+  },
+  {
+   "id": "intv_2",
+   "label": "Intervention",
+   "parent": null,
+   "properties": {
+    "description": "Psychoeducation: iceberg model, core beliefs, conditional rules and assumptions",
+    "technique": "other",
+    "techniqueLabel": "psychoeducation"
+   },
+   "evidence": [
+    2,
+    12,
+    14
+   ]
+  },
+  {
+   "id": "intv_3",
+   "label": "Intervention",
+   "parent": null,
+   "properties": {
+    "description": "Design and plan behavioral experiment: test the caretaking rule with the 10-year friend",
+    "technique": "behaviorExperiment"
+   },
+   "evidence": [
+    20,
+    24,
+    26,
+    36,
+    40
+   ]
+  },
+  {
+   "id": "hw_1",
+   "label": "Homework",
+   "parent": null,
+   "properties": {
+    "taskDescription": "Go to friend tomorrow; share own problem (stressed/busy), talk ~15 min, do NOT ask how he is",
+    "taskType": "behavioralExperiment",
+    "isOptional": false
+   },
+   "evidence": [
+    37,
+    40
+   ]
+  },
+  {
+   "id": "hw_2",
+   "label": "Homework",
+   "parent": null,
+   "properties": {
+    "taskDescription": "At end of conversation ask friend: 'Was it okay that today we just talked about me?'",
+    "taskType": "behavioralExperiment",
+    "isOptional": false
+   },
+   "evidence": [
+    40
+   ]
+  },
+  {
+   "id": "hw_3",
+   "label": "Homework",
+   "parent": null,
+   "properties": {
+    "taskDescription": "Write down feelings before the conversation and how you felt after getting his feedback",
+    "taskType": "thoughtRecord",
+    "isOptional": false
+   },
+   "evidence": [
+    44
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "type": "hasSession",
+   "from": "client_1",
+   "to": "session_1",
+   "evidence": []
+  },
+  {
+   "type": "hasProblem",
+   "from": "session_1",
+   "to": "prob_1",
+   "evidence": []
+  },
+  {
+   "type": "hasProblem",
+   "from": "session_1",
+   "to": "prob_2",
+   "evidence": []
+  },
+  {
+   "type": "hasProblem",
+   "from": "session_1",
+   "to": "prob_3",
+   "evidence": []
+  },
+  {
+   "type": "hasIntervention",
+   "from": "session_1",
+   "to": "intv_1",
+   "evidence": []
+  },
+  {
+   "type": "hasIntervention",
+   "from": "session_1",
+   "to": "intv_2",
+   "evidence": []
+  },
+  {
+   "type": "hasIntervention",
+   "from": "session_1",
+   "to": "intv_3",
+   "evidence": []
+  },
+  {
+   "type": "hasHomework",
+   "from": "session_1",
+   "to": "hw_1",
+   "evidence": []
+  },
+  {
+   "type": "hasHomework",
+   "from": "session_1",
+   "to": "hw_2",
+   "evidence": []
+  },
+  {
+   "type": "hasHomework",
+   "from": "session_1",
+   "to": "hw_3",
+   "evidence": []
+  },
+  {
+   "type": "givesRiseTo",
+   "from": "cb_1",
+   "to": "ib_1",
+   "evidence": [
+    15,
+    17
+   ]
+  },
+  {
+   "type": "givesRiseTo",
+   "from": "cb_1",
+   "to": "ib_2",
+   "evidence": [
+    17
+   ]
+  },
+  {
+   "type": "givesRiseTo",
+   "from": "cb_1",
+   "to": "ib_3",
+   "evidence": [
+    19,
+    20
+   ]
+  },
+  {
+   "type": "influencesPerceptionOf",
+   "from": "ib_3",
+   "to": "sit_2",
+   "evidence": [
+    26,
+    35
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_1",
+   "to": "at_1",
+   "evidence": [
+    1,
+    2
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_1",
+   "to": "at_2",
+   "evidence": [
+    3,
+    4
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_1",
+   "to": "at_3",
+   "evidence": [
+    5,
+    6
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_1",
+   "to": "at_4",
+   "evidence": [
+    7,
+    8
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_1",
+   "to": "at_5",
+   "evidence": [
+    9,
+    10
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_2",
+   "to": "at_6",
+   "evidence": [
+    27
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_2",
+   "to": "at_7",
+   "evidence": [
+    28,
+    31
+   ]
+  },
+  {
+   "type": "triggers",
+   "from": "sit_2",
+   "to": "at_8",
+   "evidence": [
+    35
+   ]
+  },
+  {
+   "type": "leadsTo",
+   "from": "at_1",
+   "to": "react_1",
+   "evidence": [
+    1
+   ]
+  },
+  {
+   "type": "leadsTo",
+   "from": "at_2",
+   "to": "react_2",
+   "evidence": [
+    3
+   ]
+  },
+  {
+   "type": "leadsTo",
+   "from": "at_7",
+   "to": "react_3",
+   "evidence": [
+    34,
+    35,
+    36
+   ]
+  },
+  {
+   "type": "leadsTo",
+   "from": "at_8",
+   "to": "react_3",
+   "evidence": [
+    35
+   ]
+  },
+  {
+   "type": "stemsFrom",
+   "from": "at_1",
+   "to": "cb_2",
+   "evidence": [
+    1,
+    12
+   ]
+  },
+  {
+   "type": "stemsFrom",
+   "from": "at_2",
+   "to": "cb_2",
+   "evidence": [
+    3,
+    12
+   ]
+  },
+  {
+   "type": "stemsFrom",
+   "from": "at_3",
+   "to": "cb_2",
+   "evidence": [
+    5,
+    12
+   ]
+  },
+  {
+   "type": "stemsFrom",
+   "from": "at_4",
+   "to": "cb_1",
+   "evidence": [
+    7,
+    12
+   ]
+  },
+  {
+   "type": "stemsFrom",
+   "from": "at_5",
+   "to": "cb_1",
+   "evidence": [
+    9,
+    12
+   ]
+  },
+  {
+   "type": "stemsFrom",
+   "from": "at_7",
+   "to": "cb_1",
+   "evidence": [
+    28,
+    31
+   ]
+  },
+  {
+   "type": "reinforces",
+   "from": "react_2",
+   "to": "cb_2",
+   "evidence": [
+    3,
+    11
+   ]
+  },
+  {
+   "type": "reinforces",
+   "from": "react_1",
+   "to": "cb_1",
+   "evidence": [
+    1,
+    11
+   ]
+  },
+  {
+   "type": "manifestsAs",
+   "from": "prob_2",
+   "to": "sit_1",
+   "evidence": [
+    1,
+    3
+   ]
+  },
+  {
+   "type": "targetsProblem",
+   "from": "goal_1",
+   "to": "prob_3",
+   "evidence": [
+    20,
+    44
+   ]
+  },
+  {
+   "type": "targets",
+   "from": "hw_1",
+   "to": "ib_3",
+   "evidence": [
+    24,
+    40
+   ]
+  },
+  {
+   "type": "targets",
+   "from": "hw_2",
+   "to": "ib_3",
+   "evidence": [
+    40
+   ]
+  },
+  {
+   "type": "targets",
+   "from": "hw_3",
+   "to": "at_7",
+   "evidence": [
+    44
+   ]
+  },
+  {
+   "type": "targets",
+   "from": "hw_3",
+   "to": "at_8",
+   "evidence": [
+    44
+   ]
+  },
+  {
+   "type": "appliedTo",
+   "from": "intv_1",
+   "to": "at_1",
+   "evidence": [
+    2,
+    12
+   ]
+  },
+  {
+   "type": "appliedTo",
+   "from": "intv_3",
+   "to": "ib_3",
+   "evidence": [
+    20,
+    24,
+    40
+   ]
+  }
+ ],
+ "summary_counts": {
+  "nodes_total": 30,
+  "by_label": {
+   "Client": 1,
+   "Session": 1,
+   "CoreBelief": 2,
+   "IntermediateBelief": 3,
+   "Situation": 2,
+   "AutomaticThought": 8,
+   "Reaction": 3,
+   "Problem": 3,
+   "Goal": 1,
+   "Intervention": 3,
+   "Homework": 3
+  },
+  "edges_total": 42
+ }
+}

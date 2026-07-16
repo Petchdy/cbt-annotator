@@ -1,5 +1,5 @@
 import * as onto from '../public/ontology.js';
-const need = ['CLASS_COLORS','CLASS_SHAPES','NODE_CLASSES','CLASS_PROPS','CAPTION_FIELD','EDGE_RULES','outgoingRelations','ORPHAN_OK'];
+const need = ['CLASS_COLORS','CLASS_SHAPES','NODE_CLASSES','CLASS_PROPS','CAPTION_FIELD','EDGE_RULES','outgoingRelations'];
 let ok = true;
 for (const k of need) { if (!(k in onto)) { console.log('MISSING export:', k); ok = false; } }
 for (const c of onto.NODE_CLASSES) {

@@ -8,6 +8,8 @@ import {
   signToken, setAuthCookie, clearAuthCookie,
   authOptional, requireAuth, requireAdmin,
 } from './auth.js';
+import { buildExportPayload } from '../public/exportPayload.js';
+import { SUPPORTED_LANGUAGES } from '../public/ontology.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -77,36 +79,68 @@ app.get('/api/sessions/:id', requireAuth, wrap(async (req, res) => {
     id: s.id, title: s.title, transcript: s.transcript,
     annotation: s.annotation, ui_state: s.ui_state, status: s.status,
     assigned_to: s.assigned_to,
+    language: s.language, notes: s.notes,
+    updated_at: s.updated_at,
   });
 }));
 
 // Save annotation graph + ui state + status (manual save from the labeller).
 app.put('/api/sessions/:id', requireAuth, wrap(async (req, res) => {
-  const { annotation, ui_state, status } = req.body || {};
-  const rows = await sql`SELECT assigned_to FROM sessions WHERE id = ${req.params.id}`;
+  const { annotation, ui_state, status, language, notes } = req.body || {};
+  const rows = await sql`SELECT assigned_to, language FROM sessions WHERE id = ${req.params.id}`;
   const s = rows[0];
   if (!s) return res.status(404).json({ error: 'Not found' });
   if (req.user.role !== 'admin' && s.assigned_to !== req.user.username) {
     return res.status(403).json({ error: 'Not assigned to you' });
   }
   const validStatus = ['not started', 'in progress', 'done'].includes(status) ? status : 'in progress';
-  await sql`
-    UPDATE sessions
-    SET annotation = ${JSON.stringify(annotation)}::jsonb,
-        ui_state   = ${JSON.stringify(ui_state)}::jsonb,
-        status     = ${validStatus},
-        updated_at = now()
-    WHERE id = ${req.params.id}`;
+  const validLang = SUPPORTED_LANGUAGES.includes(language) ? language : s.language;
+  const cleanNotes = Array.isArray(notes)
+    ? notes.map(n => String(n)).filter(n => n.trim().length > 0)
+    : null;
+  if (cleanNotes) {
+    await sql`
+      UPDATE sessions
+      SET annotation = ${JSON.stringify(annotation)}::jsonb,
+          ui_state   = ${JSON.stringify(ui_state)}::jsonb,
+          status     = ${validStatus},
+          language   = ${validLang},
+          notes      = ${JSON.stringify(cleanNotes)}::jsonb,
+          updated_at = now()
+      WHERE id = ${req.params.id}`;
+  } else {
+    await sql`
+      UPDATE sessions
+      SET annotation = ${JSON.stringify(annotation)}::jsonb,
+          ui_state   = ${JSON.stringify(ui_state)}::jsonb,
+          status     = ${validStatus},
+          language   = ${validLang},
+          updated_at = now()
+      WHERE id = ${req.params.id}`;
+  }
   res.json({ ok: true });
 }));
 
-// Neo4j-import export: hand back the annotation blob verbatim (option "b").
+// Neo4j-import export: build the ontology_v4_flat gold-annotation shape.
 app.get('/api/sessions/:id/export', requireAuth, wrap(async (req, res) => {
-  const rows = await sql`SELECT id, annotation FROM sessions WHERE id = ${req.params.id}`;
+  const rows = await sql`SELECT * FROM sessions WHERE id = ${req.params.id}`;
   const s = rows[0];
   if (!s) return res.status(404).json({ error: 'Not found' });
+  if (req.user.role !== 'admin' && s.assigned_to !== req.user.username) {
+    return res.status(403).json({ error: 'Not assigned to you' });
+  }
+  const payload = buildExportPayload({
+    sessionId: s.id,
+    title: s.title,
+    transcript: s.transcript,
+    annotation: s.annotation,
+    assignedTo: s.assigned_to,
+    language: s.language,
+    notes: s.notes,
+    updatedAt: s.updated_at instanceof Date ? s.updated_at.toISOString() : s.updated_at,
+  });
   res.setHeader('Content-Disposition', `attachment; filename="${s.id}_annotation.json"`);
-  res.json(s.annotation);
+  res.json(payload);
 }));
 
 // ── Admin: manage sessions and assignment ──────────────────────────────────

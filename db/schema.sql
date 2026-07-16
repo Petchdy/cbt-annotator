@@ -27,9 +27,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   status        TEXT NOT NULL DEFAULT 'not started'
                 CHECK (status IN ('not started','in progress','done')),
   assigned_to   TEXT,                           -- username of expert this is queued for (nullable)
+  language      TEXT NOT NULL DEFAULT 'english',
+  notes         JSONB NOT NULL DEFAULT '[]'::jsonb, -- array of annotator notes (gold_notes in export)
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent additive migration for existing databases created before language/notes existed.
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'english',
+  ADD COLUMN IF NOT EXISTS notes    JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_assigned ON sessions(assigned_to);

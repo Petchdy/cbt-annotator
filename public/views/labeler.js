@@ -1,7 +1,7 @@
 import { api, state, navigate } from '../app.js';
 import {
   CLASS_COLORS, CLASS_SHAPES, NODE_CLASSES, CLASS_PROPS, CAPTION_FIELD,
-  EDGE_RULES, outgoingRelations, ORPHAN_OK,
+  EDGE_RULES, outgoingRelations, SUPPORTED_LANGUAGES,
 } from '../ontology.js';
 
 export async function renderLabeler(root, sessionId) {
@@ -26,7 +26,10 @@ export async function renderLabeler(root, sessionId) {
   const ui = data.ui_state || { canvasPositions: {}, view: { panX: 40, panY: 20, scale: 1 } };
   ui.canvasPositions = ui.canvasPositions || {};
   ui.view = ui.view || { panX: 40, panY: 20, scale: 1 };
+  ui.highlights = ui.highlights || {};
   let status = data.status;
+  let language = SUPPORTED_LANGUAGES.includes(data.language) ? data.language : 'english';
+  let notesText = (Array.isArray(data.notes) ? data.notes : []).join('\n');
 
   // ensure every node has a stable id and a position
   let idCounter = Date.now();
@@ -52,6 +55,11 @@ export async function renderLabeler(root, sessionId) {
       <button id="back">← Back</button>
       <span class="brand">${data.title}</span>
       <span class="spacer"></span>
+      <label style="margin:0">Language</label>
+      <select id="lang" style="width:auto">
+        ${SUPPORTED_LANGUAGES.map(l =>
+          `<option value="${l}" ${language === l ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
       <label style="margin:0">Status</label>
       <select id="status" style="width:auto">
         ${['not started','in progress','done'].map(s =>
@@ -130,6 +138,9 @@ export async function renderLabeler(root, sessionId) {
     ss.textContent = dirty ? 'Unsaved changes' : 'Saved';
     ss.style.color = dirty ? 'var(--warning)' : 'var(--text-muted)';
   }
+  function notesArray() {
+    return notesText.split('\n').map(s => s.trim()).filter(Boolean);
+  }
   async function save() {
     // strip UI-only helper fields (_eid) before persisting the graph
     const cleanEdges = model.edges.map(({ _eid, ...rest }) => rest);
@@ -137,20 +148,31 @@ export async function renderLabeler(root, sessionId) {
       annotation: { nodes: model.nodes.map(normalizeNodeForSave), edges: cleanEdges },
       ui_state: ui,
       status,
+      language,
+      notes: notesArray(),
     });
     dirty = false; updateSaveState();
   }
   q('#save').onclick = () => save().catch(e => alert('Save failed: ' + e.message));
-  q('#readtranscript').onclick = () => openTranscriptModal(root, data.title, data.transcript);
+  q('#readtranscript').onclick = () => openTranscriptModal(root, data.title, data.transcript, {
+    highlights: ui.highlights,
+    onChange: () => { markDirty(); renderTranscript(); },
+  });
   q('#status').onchange = (e) => { status = e.target.value; markDirty(); };
-  q('#export').onclick = () => {
-    const cleanEdges = model.edges.map(({ _eid, ...rest }) => rest);
-    const blob = new Blob([JSON.stringify({ nodes: model.nodes.map(normalizeNodeForSave), edges: cleanEdges }, null, 2)],
-      { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+  q('#lang').onchange = (e) => { language = e.target.value; markDirty(); };
+  q('#export').onclick = async () => {
+    try {
+      if (dirty) await save();
+    } catch (e) {
+      alert('Save failed: ' + e.message);
+      return;
+    }
     const a = document.createElement('a');
-    a.href = url; a.download = `${sessionId}_annotation.json`; a.click();
-    URL.revokeObjectURL(url);
+    a.href = `/api/sessions/${sessionId}/export`;
+    a.download = `${sessionId}_annotation.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
   q('#back').onclick = () => {
     if (dirty) {
@@ -236,9 +258,10 @@ export async function renderLabeler(root, sessionId) {
     host.innerHTML = data.transcript.map((t, i) => {
       const turn = i + 1;
       const isEv = active.includes(turn);
+      const ranges = Array.isArray(ui.highlights[turn]) ? ui.highlights[turn] : [];
       return `<div class="turn ${isEv ? 'evidence' : ''} ${evidenceMode ? 'clickable' : ''}" data-turn="${turn}">
         <div class="meta">turn ${turn} · ${t.speaker}</div>
-        <div class="text">${escapeHtml(t.text)}</div>
+        <div class="text">${renderHighlighted(t.text, ranges, highlightColorFor)}</div>
       </div>`;
     }).join('');
     if (evidenceMode && selected) {
@@ -345,6 +368,9 @@ export async function renderLabeler(root, sessionId) {
   function tryCompleteLink(targetNode) {
     if (targetNode.id === linking.fromId) return;
     if (!linking.toClasses.includes(targetNode.label)) return; // illegal target ignored
+    const dup = model.edges.some(e =>
+      e.type === linking.type && e.from === linking.fromId && e.to === targetNode.id);
+    if (dup) { linking = null; updateHint(); renderCanvas(); return; }
     const edge = { _eid: 'e' + (idCounter++), type: linking.type, from: linking.fromId, to: targetNode.id, evidence: [] };
     if (linking.edgeProps && linking.edgeProps.length) edge.properties = {};
     model.edges.push(edge);
@@ -515,13 +541,17 @@ export async function renderLabeler(root, sessionId) {
       const counts = {};
       NODE_CLASSES.forEach(c => counts[c] = model.nodes.filter(n => n.label === c).length);
       const orphans = model.nodes.filter(n =>
-        !ORPHAN_OK.has(n.label) && !model.edges.some(e => e.from === n.id || e.to === n.id));
+        !model.edges.some(e => e.from === n.id || e.to === n.id));
       // turns with no node grounded to them
       const grounded = new Set();
       model.nodes.forEach(n => (n.evidence || []).forEach(t => grounded.add(t)));
       const unlinked = data.transcript.map((_, i) => i + 1).filter(t => !grounded.has(t));
 
       body.innerHTML = `
+        <div class="section">
+          <label>Session notes <span class="muted">(one per line)</span></label>
+          <textarea id="notes" rows="4" placeholder="Notes about this annotation…">${escapeHtml(notesText)}</textarea>
+        </div>
         <div style="margin-bottom:14px">
           ${NODE_CLASSES.map(c => `
             <div class="coverage-row ${counts[c] === 0 ? 'warn' : 'ok'}">
@@ -546,6 +576,8 @@ export async function renderLabeler(root, sessionId) {
           </div>
         </div>`;
 
+      const notesEl = body.querySelector('#notes');
+      notesEl.oninput = () => { notesText = notesEl.value; markDirty(); };
       body.querySelectorAll('[data-id]').forEach(r => {
         r.onclick = () => { selected = r.dataset.id; panelMode = 'inspector'; renderAll(); };
       });
@@ -605,7 +637,34 @@ function escapeHtml(s) {
 function escapeAttr(s) {
   return String(s ?? '').replace(/"/g, '&quot;');
 }
-function openTranscriptModal(root, title, transcript) {
+const HIGHLIGHT_PALETTE = [
+  ...NODE_CLASSES.map(c => ({ id: c, label: c, color: CLASS_COLORS[c].bg })),
+  { id: 'Review',    label: 'Review',    color: '#BFDBFE' }, // light blue — no class uses blue
+  { id: 'Important', label: 'Important', color: '#D1D5DB' }, // grey — no class uses grey
+];
+const HIGHLIGHT_ERASER = '__eraser__';
+const ERASER_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/>
+  <path d="M22 21H7"/>
+  <path d="m5 11 9 9"/>
+</svg>`;
+const HIGHLIGHTER_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="m9 11-6 6v3h9l3-3"/>
+  <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>
+</svg>`;
+const highlightColorFor = (id) => HIGHLIGHT_PALETTE.find(p => p.id === id)?.color;
+
+function openTranscriptModal(root, title, transcript, opts = {}) {
+  const highlights = opts.highlights || {};
+  // migrate any legacy per-turn shape (string) to the new range-array shape
+  for (const k of Object.keys(highlights)) {
+    if (!Array.isArray(highlights[k])) delete highlights[k];
+  }
+  const ERASER = HIGHLIGHT_ERASER;
+  const palette = HIGHLIGHT_PALETTE;
+  const colorFor = highlightColorFor;
+  let armed = null; // color id, ERASER, or null
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay transcript-modal-overlay';
   overlay.innerHTML = `
@@ -617,24 +676,207 @@ function openTranscriptModal(root, title, transcript) {
         </div>
         <button id="tclose">Close</button>
       </div>
-      <div class="transcript-reader">
-        ${transcript.map((t, i) => `
-          <article class="reader-turn">
-            <div class="reader-meta">Turn ${i + 1} · ${escapeHtml(t.speaker || 'unknown')}</div>
-            <p>${escapeHtml(t.text || '')}</p>
-          </article>`).join('')}
+      <div class="highlight-palette" id="tpalette">
+        <span class="highlight-palette-icon" aria-hidden="true">${HIGHLIGHTER_SVG}</span>
+        ${palette.map(p => `
+          <button class="highlight-swatch" style="background:${p.color}"
+            data-id="${escapeAttr(p.id)}" title="${escapeAttr(p.label)}"
+            aria-label="${escapeAttr(p.label)}"></button>`).join('')}
+        <button class="highlight-swatch hl-eraser" data-id="${ERASER}"
+          title="Eraser" aria-label="Eraser">${ERASER_SVG}</button>
+      </div>
+      <div class="transcript-reader" id="treader">
+        ${transcript.map((t, i) => {
+          const turn = i + 1;
+          const ranges = Array.isArray(highlights[turn]) ? highlights[turn] : [];
+          return `<article class="reader-turn" data-turn="${turn}">
+            <div class="reader-meta">Turn ${turn} · ${escapeHtml(t.speaker || 'unknown')}</div>
+            <p class="hl-text" data-turn="${turn}">${renderHighlighted(t.text || '', ranges, colorFor)}</p>
+          </article>`;
+        }).join('')}
       </div>
     </div>`;
   root.appendChild(overlay);
 
+  const paletteEl = overlay.querySelector('#tpalette');
+  const readerEl  = overlay.querySelector('#treader');
+
+  const paintTurn = (turn) => {
+    const el = readerEl.querySelector(`.hl-text[data-turn="${turn}"]`);
+    if (!el) return;
+    const text = transcript[turn - 1].text || '';
+    el.innerHTML = renderHighlighted(text, highlights[turn] || [], colorFor);
+  };
+
+  const updateArmedUi = () => {
+    paletteEl.querySelectorAll('.highlight-swatch').forEach(s =>
+      s.classList.toggle('active', s.dataset.id === armed));
+    readerEl.classList.toggle('armed', armed !== null && armed !== ERASER);
+    readerEl.classList.toggle('armed-eraser', armed === ERASER);
+  };
+
+  const getSelectionInReader = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const startEl = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
+    const turnEl = startEl && startEl.closest('.hl-text');
+    if (!turnEl) return null;
+    if (!turnEl.contains(range.endContainer)) return null; // cross-turn selection ignored
+    const before = document.createRange();
+    before.setStart(turnEl, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    const s = before.toString().length;
+    const e = s + range.toString().length;
+    if (s === e) return null;
+    return { turn: Number(turnEl.dataset.turn), s, e };
+  };
+
+  const applyToSelection = (id) => {
+    const r = getSelectionInReader();
+    if (!r) return false;
+    const list = Array.isArray(highlights[r.turn]) ? highlights[r.turn] : [];
+    const next = id === ERASER
+      ? eraseRange(list, r.s, r.e)
+      : addRange(list, { s: r.s, e: r.e, c: id });
+    if (next.length) highlights[r.turn] = next;
+    else delete highlights[r.turn];
+    paintTurn(r.turn);
+    window.getSelection().removeAllRanges();
+    opts.onChange?.();
+    return true;
+  };
+
+  paletteEl.querySelectorAll('.highlight-swatch').forEach(sw => {
+    // keep the text selection alive while clicking the swatch
+    sw.addEventListener('mousedown', (e) => e.preventDefault());
+    sw.onclick = () => {
+      const id = sw.dataset.id;
+      // Eraser never applies to a text selection — click-on-highlight is its only edit path.
+      if (id !== ERASER) {
+        const applied = applyToSelection(id);
+        if (applied) return;
+      }
+      armed = (armed === id) ? null : id;
+      updateArmedUi();
+    };
+  });
+
+  // Auto-apply on mouseup while armed (color only — eraser is click-on-mark)
+  readerEl.addEventListener('mouseup', () => {
+    if (!armed || armed === ERASER) return;
+    setTimeout(() => applyToSelection(armed), 0);
+  });
+
+  // Click an existing highlight → popover (or, with eraser armed, remove the whole range)
+  let popover = null;
+  const closePopover = () => { if (popover) { popover.remove(); popover = null; } };
+  const removeWholeMark = (mark) => {
+    const turnEl = mark.closest('.hl-text');
+    const turn = Number(turnEl.dataset.turn);
+    const s = Number(mark.dataset.s);
+    const eOff = Number(mark.dataset.e);
+    const list = Array.isArray(highlights[turn]) ? highlights[turn] : [];
+    const next = eraseRange(list, s, eOff);
+    if (next.length) highlights[turn] = next;
+    else delete highlights[turn];
+    paintTurn(turn);
+    opts.onChange?.();
+  };
+  readerEl.addEventListener('click', (e) => {
+    const mark = e.target.closest('mark.hl');
+    if (!mark) return;
+    // If there's an active drag selection, let the mouseup handler apply it — skip.
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) return;
+    if (armed === ERASER) {
+      e.stopPropagation();
+      removeWholeMark(mark);
+      return;
+    }
+    if (armed !== null) return; // color painting mode wins
+    e.stopPropagation();
+    closePopover();
+    const turnEl = mark.closest('.hl-text');
+    const turn = Number(turnEl.dataset.turn);
+    const s = Number(mark.dataset.s);
+    const eOff = Number(mark.dataset.e);
+    popover = document.createElement('div');
+    popover.className = 'hl-popover';
+    popover.innerHTML = '<button type="button">Remove highlight</button>';
+    document.body.appendChild(popover);
+    const rect = mark.getBoundingClientRect();
+    const pw = popover.getBoundingClientRect().width;
+    const left = Math.min(window.innerWidth - pw - 8, Math.max(8, e.clientX - pw / 2));
+    popover.style.left = `${left}px`;
+    popover.style.top  = `${rect.bottom + 4}px`;
+    popover.querySelector('button').onclick = (ev) => {
+      ev.stopPropagation();
+      const list = Array.isArray(highlights[turn]) ? highlights[turn] : [];
+      const next = eraseRange(list, s, eOff);
+      if (next.length) highlights[turn] = next;
+      else delete highlights[turn];
+      paintTurn(turn);
+      closePopover();
+      opts.onChange?.();
+    };
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (popover && !popover.contains(e.target)) closePopover();
+  });
+
   const close = () => {
     window.removeEventListener('keydown', onKey);
+    closePopover();
     overlay.remove();
   };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#tclose').onclick = close;
   window.addEventListener('keydown', onKey);
+}
+
+function renderHighlighted(text, ranges, colorFor) {
+  if (!ranges || !ranges.length) return escapeHtml(text);
+  const sorted = [...ranges].sort((a, b) => a.s - b.s);
+  let out = '';
+  let cursor = 0;
+  for (const r of sorted) {
+    if (r.s > cursor) out += escapeHtml(text.slice(cursor, r.s));
+    const bg = colorFor(r.c) || '#ffd54f';
+    out += `<mark class="hl" data-s="${r.s}" data-e="${r.e}" style="background:${bg}">${escapeHtml(text.slice(r.s, r.e))}</mark>`;
+    cursor = r.e;
+  }
+  if (cursor < text.length) out += escapeHtml(text.slice(cursor));
+  return out;
+}
+
+function addRange(ranges, add) {
+  const out = [];
+  for (const r of ranges) {
+    if (r.e <= add.s || r.s >= add.e) { out.push(r); continue; }
+    if (r.s < add.s) out.push({ ...r, e: add.s });
+    if (r.e > add.e) out.push({ ...r, s: add.e });
+  }
+  out.push(add);
+  out.sort((a, b) => a.s - b.s);
+  const merged = [];
+  for (const r of out) {
+    const last = merged[merged.length - 1];
+    if (last && last.c === r.c && last.e === r.s) last.e = r.e;
+    else merged.push({ ...r });
+  }
+  return merged;
+}
+
+function eraseRange(ranges, s, e) {
+  const out = [];
+  for (const r of ranges) {
+    if (r.e <= s || r.s >= e) { out.push(r); continue; }
+    if (r.s < s) out.push({ ...r, e: s });
+    if (r.e > e) out.push({ ...r, s: e });
+  }
+  return out;
 }
 function confirmLeave(root, onSave, onDiscard) {
   const overlay = document.createElement('div');
