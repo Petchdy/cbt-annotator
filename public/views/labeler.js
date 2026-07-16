@@ -30,6 +30,7 @@ export async function renderLabeler(root, sessionId) {
   let status = data.status;
   let language = SUPPORTED_LANGUAGES.includes(data.language) ? data.language : 'english';
   let notesText = (Array.isArray(data.notes) ? data.notes : []).join('\n');
+  const isAdmin = state.user?.role === 'admin';
 
   // ensure every node has a stable id and a position
   let idCounter = Date.now();
@@ -55,11 +56,12 @@ export async function renderLabeler(root, sessionId) {
       <button id="back">← Back</button>
       <span class="brand">${data.title}</span>
       <span class="spacer"></span>
+      ${isAdmin ? `
       <label style="margin:0">Language</label>
       <select id="lang" style="width:auto">
         ${SUPPORTED_LANGUAGES.map(l =>
           `<option value="${l}" ${language === l ? 'selected' : ''}>${l}</option>`).join('')}
-      </select>
+      </select>` : ''}
       <label style="margin:0">Status</label>
       <select id="status" style="width:auto">
         ${['not started','in progress','done'].map(s =>
@@ -159,7 +161,8 @@ export async function renderLabeler(root, sessionId) {
     onChange: () => { markDirty(); renderTranscript(); },
   });
   q('#status').onchange = (e) => { status = e.target.value; markDirty(); };
-  q('#lang').onchange = (e) => { language = e.target.value; markDirty(); };
+  const langSel = q('#lang');
+  if (langSel) langSel.onchange = (e) => { language = e.target.value; markDirty(); };
   q('#export').onclick = async () => {
     try {
       if (dirty) await save();
@@ -548,10 +551,10 @@ export async function renderLabeler(root, sessionId) {
       const unlinked = data.transcript.map((_, i) => i + 1).filter(t => !grounded.has(t));
 
       body.innerHTML = `
-        <div class="section">
+        ${isAdmin ? `<div class="section">
           <label>Session notes <span class="muted">(one per line)</span></label>
           <textarea id="notes" rows="4" placeholder="Notes about this annotation…">${escapeHtml(notesText)}</textarea>
-        </div>
+        </div>` : ''}
         <div style="margin-bottom:14px">
           ${NODE_CLASSES.map(c => `
             <div class="coverage-row ${counts[c] === 0 ? 'warn' : 'ok'}">
@@ -577,7 +580,7 @@ export async function renderLabeler(root, sessionId) {
         </div>`;
 
       const notesEl = body.querySelector('#notes');
-      notesEl.oninput = () => { notesText = notesEl.value; markDirty(); };
+      if (notesEl) notesEl.oninput = () => { notesText = notesEl.value; markDirty(); };
       body.querySelectorAll('[data-id]').forEach(r => {
         r.onclick = () => { selected = r.dataset.id; panelMode = 'inspector'; renderAll(); };
       });
