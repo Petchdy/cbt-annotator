@@ -70,7 +70,8 @@ export const CLASS_PROPS = {
     { key: 'direction', kind: 'enum', label: 'Direction', options: ['positive','negative'] },
     { key: 'domain', kind: 'enum', label: 'Domain', options: ['self','world','others'] },
     { key: 'category', kind: 'enum', label: 'Category', optional: true,
-      options: ['helpless','unlovable','worthless'] },
+      options: ['helpless','unlovable','worthless'],
+      showIf: { key: 'domain', equals: 'self' } },
     { key: 'derived', kind: 'bool', label: 'Derived (inferred, not stated)', optional: true },
   ],
   IntermediateBelief: [
