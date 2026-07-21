@@ -67,10 +67,10 @@ export const CLASS_PROPS = {
   ],
   CoreBelief: [
     { key: 'content', kind: 'text', label: 'Content' },
+    { key: 'direction', kind: 'enum', label: 'Direction', options: ['positive','negative'] },
     { key: 'domain', kind: 'enum', label: 'Domain', options: ['self','world','others'] },
     { key: 'category', kind: 'enum', label: 'Category', optional: true,
-      options: ['helpless','unlovable','worthless'],
-      showIf: { key: 'domain', equals: 'self' } },
+      options: ['helpless','unlovable','worthless'] },
     { key: 'derived', kind: 'bool', label: 'Derived (inferred, not stated)', optional: true },
   ],
   IntermediateBelief: [
@@ -197,4 +197,3 @@ export const SESSION_STRUCTURE_HAS = {
 export const DERIVED_DEFAULT_FALSE = new Set(['Problem', 'CoreBelief']);
 
 export const SUPPORTED_LANGUAGES = ['english', 'thai'];
-
