@@ -2,7 +2,6 @@
 // CBT KG ontology v4_flat — single source of truth for the annotation UI.
 // Node classes, property schemas (with conditional fields), edge rules,
 // and Neo4j-style colours (from neo4j_style_v4_flat.grass).
-// Fallback-only elements (associatedWith edge) are intentionally excluded.
 // ─────────────────────────────────────────────────────────────────────────
 
 // Colours copied from the Neo4j .grass style. AdaptiveResponse given a
@@ -117,7 +116,7 @@ export const CAPTION_FIELD = {
 };
 
 // Edge rules: for each relation type, which source class(es) and which
-// target class(es) are legal. Fallback-only `associatedWith` is excluded.
+// target class(es) are legal.
 // `edgeProps` lists optional properties carried on that relation type.
 export const EDGE_RULES = [
   { type: 'givesRiseTo',            from: ['CoreBelief'],         to: ['IntermediateBelief'] },
@@ -127,6 +126,7 @@ export const EDGE_RULES = [
     edgeProps: [{ key: 'reportedIntensity', kind: 'text', label: 'Reported intensity', optional: true }] },
   { type: 'leadsTo',               from: ['Reaction'],           to: ['Reaction'] },
   { type: 'stemsFrom',             from: ['AutomaticThought'],   to: ['CoreBelief'] },
+  { type: 'associatedWith',        from: ['AutomaticThought'],   to: ['Problem'] },
   { type: 'reinforces',            from: ['Reaction'],           to: ['CoreBelief'] },
   { type: 'becomesSituation',      from: ['Reaction'],           to: ['Situation'] },
   { type: 'hasAdaptiveResponse',   from: ['AutomaticThought'],   to: ['AdaptiveResponse'] },

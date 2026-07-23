@@ -37,8 +37,8 @@ for (const r of EDGE_RULES) {
 
 // spot-check outgoingRelations for a couple of classes
 const atRels = outgoingRelations('AutomaticThought').map(r => r.type).sort();
-check('AutomaticThought outgoing = leadsTo,stemsFrom,hasAdaptiveResponse',
-  JSON.stringify(atRels) === JSON.stringify(['hasAdaptiveResponse', 'leadsTo', 'stemsFrom']));
+check('AutomaticThought outgoing = associatedWith,hasAdaptiveResponse,leadsTo,stemsFrom',
+  JSON.stringify(atRels) === JSON.stringify(['associatedWith', 'hasAdaptiveResponse', 'leadsTo', 'stemsFrom']));
 const sitRels = outgoingRelations('Situation');
 check('Situation.triggers targets AT and Reaction',
   sitRels.find(r => r.type === 'triggers').to.sort().join(',') === 'AutomaticThought,Reaction');
@@ -46,9 +46,10 @@ const leads = outgoingRelations('AutomaticThought').find(r => r.type === 'leadsT
 check('leadsTo carries reportedIntensity edge prop',
   leads.edgeProps.some(p => p.key === 'reportedIntensity'));
 
-// associatedWith (fallback) must NOT be present
-check('fallback associatedWith excluded',
-  !EDGE_RULES.some(r => r.type === 'associatedWith'));
+// associatedWith is now a real edge from AutomaticThought to Problem
+const assoc = EDGE_RULES.find(r => r.type === 'associatedWith');
+check('associatedWith: AutomaticThought → Problem',
+  !!assoc && assoc.from.join(',') === 'AutomaticThought' && assoc.to.join(',') === 'Problem');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
