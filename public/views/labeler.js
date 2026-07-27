@@ -567,7 +567,7 @@ export async function renderLabeler(root, sessionId) {
     const active = (panelMode === 'inspector' && selected)
       ? (model.nodes.find(n => n.id === selected)?.evidence || []) : [];
     host.innerHTML = data.transcript.map((t, i) => {
-      const turn = i + 1;
+      const turn = i;
       const isEv = active.includes(turn);
       const ranges = Array.isArray(ui.highlights[turn]) ? ui.highlights[turn] : [];
       return `<div class="turn ${isEv ? 'evidence' : ''} ${evidenceMode ? 'clickable' : ''}" data-turn="${turn}">
@@ -955,7 +955,7 @@ export async function renderLabeler(root, sessionId) {
       // turns with no node grounded to them
       const grounded = new Set();
       model.nodes.forEach(n => (n.evidence || []).forEach(t => grounded.add(t)));
-      const unlinked = data.transcript.map((_, i) => i + 1).filter(t => !grounded.has(t));
+      const unlinked = data.transcript.map((_, i) => i).filter(t => !grounded.has(t));
 
       body.innerHTML = `
         ${isAdmin ? `<div class="section">
@@ -1097,7 +1097,7 @@ function openTranscriptModal(root, title, transcript, opts = {}) {
       </div>
       <div class="transcript-reader" id="treader">
         ${transcript.map((t, i) => {
-          const turn = i + 1;
+          const turn = i;
           const ranges = Array.isArray(highlights[turn]) ? highlights[turn] : [];
           return `<article class="reader-turn" data-turn="${turn}">
             <div class="reader-meta">Turn ${turn} · ${escapeHtml(t.speaker || 'unknown')}</div>
@@ -1114,7 +1114,7 @@ function openTranscriptModal(root, title, transcript, opts = {}) {
   const paintTurn = (turn) => {
     const el = readerEl.querySelector(`.hl-text[data-turn="${turn}"]`);
     if (!el) return;
-    const text = transcript[turn - 1].text || '';
+    const text = transcript[turn].text || '';
     el.innerHTML = renderHighlighted(text, highlights[turn] || [], colorFor);
   };
 
