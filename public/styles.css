@@ -186,6 +186,11 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
 .node .cap { font-size: 12px; font-weight: 500; margin-top: 3px; word-break: break-word; }
 .node.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .node.link-target { outline: 2px dashed var(--accent); outline-offset: 1px; }
+.node.focus-neighbor {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+  box-shadow: 0 0 0 4px var(--accent-bg);
+}
+.node.focus-dim { opacity: 0.32; filter: saturate(0.5); }
 
 .node.tbox {
   width: 140px; padding: 6px 8px;

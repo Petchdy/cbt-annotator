@@ -54,6 +54,7 @@ export async function renderLabeler(root, sessionId) {
   let evidenceMode = false;
   let linking = null;       // { fromId, type, toClasses, edgeProps } while choosing a target
   let dirty = false;
+  let justDragged = false;  // set by makeDraggable when a drag moves; swallowed by the next viewport click so drag-release doesn't deselect
   const markDirty = () => { dirty = true; updateSaveState(); };
 
   // ── Shell ─────────────────────────────────────────────────────────────────
@@ -386,7 +387,7 @@ export async function renderLabeler(root, sessionId) {
     const { clusters, orphans, problems } = computeProblemClusters();
     const NODE_W = 150, NODE_H = 60;
     const NODE_GAP_X = 55;   // sibling gap in the same layer
-    const NODE_GAP_Y = 110;  // between BFS layers — must be tall enough for the edge label to sit on the line without touching either node
+    const NODE_GAP_Y = 140;  // between BFS layers — tall enough for a perpendicular-offset label to clear both rows
     const CLUSTER_GAP_X = 180;
     const Y_ABOX = 500; // well below deepest TBox row
     let x = 60;
@@ -394,13 +395,22 @@ export async function renderLabeler(root, sessionId) {
     const placeCluster = (rootId, memberIds) => {
       if (!memberIds.length) return 0;
       const memberSet = new Set(memberIds);
+      // Undirected adjacency restricted to this cluster — cross-cluster edges
+      // are ignored so barycenter doesn't tug clusters into each other.
+      const nbrs = {};
+      for (const id of memberIds) nbrs[id] = [];
+      for (const e of model.edges) {
+        if (memberSet.has(e.from) && memberSet.has(e.to)) {
+          nbrs[e.from].push(e.to);
+          nbrs[e.to].push(e.from);
+        }
+      }
       const layer = { [rootId]: 0 };
       const queue = [rootId];
       while (queue.length) {
         const id = queue.shift();
-        for (const e of model.edges) {
-          const nb = e.from === id ? e.to : (e.to === id ? e.from : null);
-          if (nb && memberSet.has(nb) && layer[nb] === undefined) {
+        for (const nb of nbrs[id]) {
+          if (layer[nb] === undefined) {
             layer[nb] = layer[id] + 1;
             queue.push(nb);
           }
@@ -412,6 +422,28 @@ export async function renderLabeler(root, sessionId) {
       const layerKeys = Object.keys(byLayer).map(Number).sort((a, b) => a - b);
       const maxWide = Math.max(...layerKeys.map(k => byLayer[k].length));
       const clusterW = Math.max(NODE_W, maxWide * NODE_W + (maxWide - 1) * NODE_GAP_X);
+
+      // Barycenter reordering (Sugiyama step-2). Two down + two up sweeps
+      // converge for our graph sizes. Neighbours sit at the mean order-index
+      // of their adjacent-layer partners.
+      const order = {}; // nodeId -> position within its layer (0..n-1)
+      for (const l of layerKeys) byLayer[l].forEach((id, i) => order[id] = i);
+      const meanNbrOrder = (id, otherLayer) => {
+        const ns = nbrs[id].filter(nb => layer[nb] === otherLayer);
+        if (!ns.length) return order[id]; // no anchor — keep current position
+        return ns.reduce((s, nb) => s + order[nb], 0) / ns.length;
+      };
+      const sweep = (dir) => {
+        const seq = dir === 'down' ? layerKeys : [...layerKeys].reverse();
+        for (const l of seq) {
+          const other = dir === 'down' ? l - 1 : l + 1;
+          if (byLayer[other] === undefined) continue;
+          byLayer[l].sort((a, b) => meanNbrOrder(a, other) - meanNbrOrder(b, other));
+          byLayer[l].forEach((id, i) => order[id] = i);
+        }
+      };
+      for (let pass = 0; pass < 2; pass++) { sweep('down'); sweep('up'); }
+
       for (const l of layerKeys) {
         const nodes = byLayer[l];
         const totalW = nodes.length * NODE_W + (nodes.length - 1) * NODE_GAP_X;
@@ -507,20 +539,27 @@ export async function renderLabeler(root, sessionId) {
     ui.view.scale = Math.min(2, Math.max(0.4, ui.view.scale - e.deltaY * 0.001));
     applyTransform();
   }, { passive: false });
-  let panning = false, psx, psy, ppx, ppy;
+  let panning = false, panMoved = false, psx, psy, ppx, ppy;
   viewport.addEventListener('mousedown', (e) => {
     if (e.target !== viewport && e.target !== world && e.target !== canvas && e.target !== svg) return;
     if (linking) return; // clicking empty space cancels link below
-    panning = true; psx = e.clientX; psy = e.clientY; ppx = ui.view.panX; ppy = ui.view.panY;
+    panning = true; panMoved = false; psx = e.clientX; psy = e.clientY; ppx = ui.view.panX; ppy = ui.view.panY;
     viewport.style.cursor = 'grabbing';
   });
   window.addEventListener('mousemove', (e) => {
-    if (panning) { ui.view.panX = ppx + (e.clientX - psx); ui.view.panY = ppy + (e.clientY - psy); applyTransform(); }
+    if (panning) {
+      ui.view.panX = ppx + (e.clientX - psx); ui.view.panY = ppy + (e.clientY - psy); applyTransform();
+      if (Math.abs(e.clientX - psx) > 3 || Math.abs(e.clientY - psy) > 3) panMoved = true;
+    }
   });
-  window.addEventListener('mouseup', () => { panning = false; viewport.style.cursor = 'grab'; });
+  window.addEventListener('mouseup', () => {
+    if (panning && panMoved) justDragged = true; // suppress the trailing click from a pan
+    panning = false; panMoved = false; viewport.style.cursor = 'grab';
+  });
 
   // clicking empty canvas cancels an in-progress link or deselects
   viewport.addEventListener('click', (e) => {
+    if (justDragged) { justDragged = false; return; } // drag-release, not a real deselect click
     if (e.target === viewport || e.target === world || e.target === canvas || e.target === svg) {
       if (linking) { linking = null; updateHint(); renderCanvas(); }
       else if (selected) { selected = null; panelMode = 'coverage'; renderAll(); }
@@ -607,15 +646,37 @@ export async function renderLabeler(root, sessionId) {
       renderEdges();
     };
     const up = () => {
-      if (dragging && moved) { ui.canvasPositions[id] = pos; markDirty(); }
+      if (dragging && moved) {
+        ui.canvasPositions[id] = pos; markDirty();
+        justDragged = true; // suppress the click that fires on the canvas after this drag
+      }
       dragging = false;
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
   }
 
+  // Focus set: when a node is selected, the set of ids that share an edge
+  // with it (both directions). TBox nodes are always dimmed alongside
+  // unrelated ABox nodes. Returns null when nothing is selected → no dimming.
+  function computeFocusSet() {
+    if (!selected) return null;
+    const set = new Set([selected]);
+    for (const e of model.edges) {
+      if (e.from === selected) set.add(e.to);
+      else if (e.to === selected) set.add(e.from);
+    }
+    return set;
+  }
+  const focusClass = (focus, id) => {
+    if (!focus) return '';
+    if (id === selected) return '';
+    return focus.has(id) ? ' focus-neighbor' : ' focus-dim';
+  };
+
   function renderCanvas() {
     canvas.innerHTML = '';
+    const focus = computeFocusSet();
 
     // TBox class nodes (ontology upper-schema). Hidden by default; toggle via
     // the "Show TBox" button. Manual classes reuse their colour so instance ↔
@@ -626,7 +687,8 @@ export async function renderLabeler(root, sessionId) {
       if (!pos) continue;
       const isManual = NODE_CLASSES.includes(t.name);
       const d = document.createElement('div');
-      d.className = 'node tbox' + (isManual ? '' : ' abstract');
+      d.className = 'node tbox' + (isManual ? '' : ' abstract') +
+        (focus ? ' focus-dim' : '');
       d.dataset.id = t.id;
       d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
       if (isManual) {
@@ -645,7 +707,8 @@ export async function renderLabeler(root, sessionId) {
       const pos = ui.canvasPositions[n.id] || { x: 200, y: 200 };
       const d = document.createElement('div');
       d.className = 'node' + (selected === n.id ? ' selected' : '') +
-        (linking && linking.toClasses.includes(n.label) && n.id !== linking.fromId ? ' link-target' : '');
+        (linking && linking.toClasses.includes(n.label) && n.id !== linking.fromId ? ' link-target' : '') +
+        focusClass(focus, n.id);
       d.dataset.id = n.id;
       d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
       d.style.background = col.bg; d.style.color = col.text; d.style.borderColor = col.border;
@@ -704,24 +767,47 @@ export async function renderLabeler(root, sessionId) {
       if (pos) rects[id] = { x: pos.x, y: pos.y, w: child.offsetWidth, h: child.offsetHeight };
     });
 
-    const drawEdge = (fromId, toId, label, opts) => {
+    // Focus state controls opacity/weight of ABox edges when a node is
+    // selected: 'active' = touches selection, 'dim' = doesn't, 'normal' = no
+    // selection (all edges rendered plainly).
+    const focus = computeFocusSet();
+    const edgeState = (fromId, toId) => {
+      if (!focus) return 'normal';
+      return (fromId === selected || toId === selected) ? 'active' : 'dim';
+    };
+
+    // Shift edge labels perpendicular to the line so they don't sit on a
+    // node that happens to be near the geometric midpoint.
+    const LABEL_OFFSET = 14;
+
+    const drawEdge = (fromId, toId, label, opts, state = 'normal') => {
       const ra = rects[fromId], rb = rects[toId];
       if (!ra || !rb) return '';
       const ca = { x: ra.x + ra.w / 2, y: ra.y + ra.h / 2 };
       const cb = { x: rb.x + rb.w / 2, y: rb.y + rb.h / 2 };
       const p1 = anchor(ra, cb.x, cb.y), p2 = anchor(rb, ca.x, ca.y);
-      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const midX = (p1.x + p2.x) / 2, midY = (p1.y + p2.y) / 2;
+      const dx = p2.x - p1.x, dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy) || 1;
+      // Right-hand perpendicular relative to the arrow direction.
+      const nx = -dy / len, ny = dx / len;
+      const mx = midX + nx * LABEL_OFFSET;
+      const my = midY + ny * LABEL_OFFSET;
       const stroke = opts.stroke || 'var(--text-muted)';
       const marker = opts.marker || 'arrow';
-      const strokeWidth = opts.strokeWidth || 1.5;
+      const baseWidth = opts.strokeWidth || 1.5;
       const dash = opts.dash ? `stroke-dasharray="${opts.dash}"` : '';
       const labelColor = opts.labelColor || 'var(--text-secondary)';
       const labelFont = opts.labelFontSize || 10;
       const labelBg = opts.labelBg || 'var(--surface-0)';
       const labelBgOpacity = opts.labelBgOpacity || 0.9;
       const labelWeight = opts.labelWeight || 'normal';
-      let s = `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"
-        stroke="${stroke}" stroke-width="${strokeWidth}" ${dash} marker-end="url(#${marker})"/>`;
+      const strokeOpacity = state === 'dim' ? 0.22 : 1;
+      const strokeWidth = state === 'active' ? baseWidth + 0.8 : baseWidth;
+      const groupOpacity = state === 'dim' ? 0.35 : 1;
+      let s = `<g opacity="${groupOpacity}">`;
+      s += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"
+        stroke="${stroke}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}" ${dash} marker-end="url(#${marker})"/>`;
       if (label) {
         const w = label.length * (labelFont * 0.62) + 10;
         s += `<rect x="${mx - w/2}" y="${my - labelFont + 1}" width="${w}" height="${labelFont + 4}" rx="3"
@@ -729,6 +815,7 @@ export async function renderLabeler(root, sessionId) {
           <text x="${mx}" y="${my + 3}" font-size="${labelFont}" font-weight="${labelWeight}"
           fill="${labelColor}" text-anchor="middle">${label}</text>`;
       }
+      s += `</g>`;
       return s;
     };
 
@@ -765,7 +852,7 @@ export async function renderLabeler(root, sessionId) {
       labelBg: 'var(--surface-2)', labelBgOpacity: 1,
     };
     for (const e of model.edges) {
-      out += drawEdge(e.from, e.to, e.type, userEdgeOpts);
+      out += drawEdge(e.from, e.to, e.type, userEdgeOpts, edgeState(e.from, e.to));
     }
     svg.innerHTML = out;
   }
