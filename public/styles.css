@@ -187,6 +187,17 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
 .node.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .node.link-target { outline: 2px dashed var(--accent); outline-offset: 1px; }
 
+.node.tbox {
+  width: 140px; padding: 6px 8px;
+  border-style: dashed; border-width: 2px; opacity: 0.92; cursor: move;
+}
+.node.tbox .cls { font-weight: 700; letter-spacing: 0.08em; font-size: 8px; }
+.node.tbox .cap { font-size: 11px; font-weight: 600; margin-top: 2px; }
+.node.tbox.abstract {
+  background: var(--surface-1); color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+
 .canvas-tools {
   position: absolute; bottom: 12px; left: 12px; display: flex; gap: 6px; align-items: center;
 }
@@ -195,6 +206,15 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
   font-weight: 500; box-shadow: 0 8px 20px rgba(0,0,0,0.16);
 }
 .canvas-tools button:hover { filter: brightness(1.06); background: var(--accent); }
+.canvas-tools button#toggletbox {
+  background: var(--surface-2); color: var(--text-secondary);
+  border: 1px solid var(--border-strong); font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+.canvas-tools button#toggletbox:hover { background: var(--surface-1); filter: none; }
+.canvas-tools button#toggletbox.active {
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent);
+}
 .zoom-tools {
   position: absolute; bottom: 12px; right: 12px; display: flex; gap: 2px;
   background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius);

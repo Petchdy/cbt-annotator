@@ -1,7 +1,7 @@
 import { api, state, navigate } from '../app.js';
 import {
   CLASS_COLORS, CLASS_SHAPES, NODE_CLASSES, CLASS_PROPS, CAPTION_FIELD,
-  EDGE_RULES, outgoingRelations, SUPPORTED_LANGUAGES,
+  EDGE_RULES, TBOX_NODES, TBOX_EDGES, outgoingRelations, SUPPORTED_LANGUAGES,
 } from '../ontology.js';
 
 export async function renderLabeler(root, sessionId) {
@@ -27,6 +27,7 @@ export async function renderLabeler(root, sessionId) {
   ui.canvasPositions = ui.canvasPositions || {};
   ui.view = ui.view || { panX: 40, panY: 20, scale: 1 };
   ui.highlights = ui.highlights || {};
+  if (typeof ui.showTBox !== 'boolean') ui.showTBox = false;
   let status = data.status;
   let language = SUPPORTED_LANGUAGES.includes(data.language) ? data.language : 'english';
   let notesText = (Array.isArray(data.notes) ? data.notes : []).join('\n');
@@ -39,6 +40,13 @@ export async function renderLabeler(root, sessionId) {
     if (!ui.canvasPositions[n.id]) ui.canvasPositions[n.id] = { x: 200, y: 200 };
   }
   for (const e of model.edges) { if (!e._eid) e._eid = 'e' + (idCounter++); }
+
+  const nameToTBoxId = Object.fromEntries(TBOX_NODES.map(t => [t.name, t.id]));
+  const tboxChildrenMap = {};
+  TBOX_EDGES.filter(e => e.type === 'SUB_CLASS_OF').forEach(e => {
+    (tboxChildrenMap[e.to] = tboxChildrenMap[e.to] || []).push(e.from);
+  });
+  const tboxNameOf = (id) => TBOX_NODES.find(t => t.id === id)?.name;
 
   // ── View state ────────────────────────────────────────────────────────────
   let selected = null;      // node id
@@ -68,6 +76,8 @@ export async function renderLabeler(root, sessionId) {
           `<option ${status === s ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
       <span id="savestate" class="muted">Saved</span>
+      <button id="import" title="Import an exported annotation JSON into this session">Import</button>
+      <input type="file" id="importfile" accept="application/json,.json" hidden>
       <button id="export">Export</button>
       <button class="primary" id="save">Save</button>
     </div>
@@ -88,6 +98,7 @@ export async function renderLabeler(root, sessionId) {
         <div class="hint-banner" id="hint" style="display:none"></div>
         <div class="canvas-tools">
           <button id="addnode">+ New node</button>
+          <button id="toggletbox" title="Show ontology (TBox) classes and their instance-of links">Show TBox</button>
         </div>
         <div class="zoom-tools">
           <button id="zoomout">−</button>
@@ -163,6 +174,93 @@ export async function renderLabeler(root, sessionId) {
   q('#status').onchange = (e) => { status = e.target.value; markDirty(); };
   const langSel = q('#lang');
   if (langSel) langSel.onchange = (e) => { language = e.target.value; markDirty(); };
+  // Import a previously exported annotation JSON into this session. Structural
+  // nodes/edges (Client, Session, hasSession, hasProblem, ...) are stripped —
+  // export re-derives them from the ABox. Evidence turn indices, edge
+  // properties and gold notes carry over as-is.
+  function importAnnotation(json) {
+    if (!json || !Array.isArray(json.nodes)) {
+      throw new Error('Not a valid annotation payload — missing "nodes" array.');
+    }
+    const validClasses = new Set(NODE_CLASSES);
+    const importedNodes = json.nodes.filter(n => validClasses.has(n.label));
+    const importedIds = new Set(importedNodes.map(n => n.id));
+    const importedEdges = (json.edges || []).filter(e =>
+      importedIds.has(e.from) && importedIds.has(e.to));
+
+    // Advance idCounter past any imported n<digits> ids so future spawns don't collide.
+    for (const n of importedNodes) {
+      const m = /^n(\d+)$/.exec(n.id);
+      if (m) idCounter = Math.max(idCounter, Number(m[1]) + 1);
+    }
+
+    model.nodes = importedNodes.map(n => ({
+      id: n.id,
+      label: n.label,
+      parent: sessionId,
+      properties: { ...(n.properties || {}) },
+      evidence: Array.isArray(n.evidence) ? n.evidence.slice() : [],
+    }));
+    model.edges = importedEdges.map(e => ({
+      _eid: 'e' + (idCounter++),
+      type: e.type,
+      from: e.from,
+      to: e.to,
+      evidence: Array.isArray(e.evidence) ? e.evidence.slice() : [],
+      ...(e.properties ? { properties: { ...e.properties } } : {}),
+    }));
+
+    // Reset canvas layout — old positions belong to the previous annotation.
+    ui.canvasPositions = {};
+    ui.aboxSnapshot = null;
+    layoutProblemClusters();
+
+    // Meta bits that carry over if present.
+    const meta = json.meta || {};
+    if (typeof meta.language === 'string' && SUPPORTED_LANGUAGES.includes(meta.language)) {
+      language = meta.language;
+      const langSel = q('#lang');
+      if (langSel) langSel.value = language;
+    }
+    if (Array.isArray(meta.gold_notes)) {
+      notesText = meta.gold_notes.join('\n');
+    }
+
+    // Turn-index sanity check — evidence lives in transcript coordinates.
+    const expected = data.transcript?.length ?? 0;
+    const claimed = meta.n_turns ?? expected;
+    if (expected && claimed && expected !== claimed) {
+      alert(`Warning: imported annotation was made for ${claimed} turns, this session has ${expected}. Evidence turn numbers may not line up.`);
+    }
+
+    selected = null; panelMode = 'coverage'; evidenceMode = false; linking = null;
+    markDirty();
+    renderAll();
+    requestAnimationFrame(centerViewportOnContent);
+  }
+
+  q('#import').onclick = () => q('#importfile').click();
+  q('#importfile').onchange = async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const nCurrent = model.nodes.length + model.edges.length;
+      if (nCurrent > 0 && !confirm(
+        `Importing "${file.name}" will replace the current ${model.nodes.length} node(s) and ${model.edges.length} edge(s) in this session. Continue?`
+      )) {
+        ev.target.value = '';
+        return;
+      }
+      importAnnotation(json);
+    } catch (err) {
+      alert('Import failed: ' + err.message);
+    } finally {
+      ev.target.value = '';
+    }
+  };
+
   q('#export').onclick = async () => {
     try {
       if (dirty) await save();
@@ -194,6 +292,216 @@ export async function renderLabeler(root, sessionId) {
   }
   q('#zoomin').onclick = () => { ui.view.scale = Math.min(2, ui.view.scale + 0.15); applyTransform(); markDirty(); };
   q('#zoomout').onclick = () => { ui.view.scale = Math.max(0.4, ui.view.scale - 0.15); applyTransform(); markDirty(); };
+
+  // Wide horizontal tree layout: each depth-1 family lives in its own column,
+  // with generous whitespace between families so the graph reads clearly.
+  // Depth-1 groups are ordered so heavily cross-linked families end up adjacent
+  // (SessionStructure ↔ CognitiveModel share Problem↔Situation, targets,
+  // appliedTo, associatedWith). OWL_Thing is intentionally omitted.
+  function layoutOntology() {
+    const TBOX_W = 140;
+    const CHILD_GAP = 90;   // between siblings inside a family — sparse
+    const FAMILY_GAP = 180; // between depth-1 families
+    const ROW_Y = 150;      // vertical between depth levels
+    const X_MARGIN = 60, Y_TOP = 40;
+
+    // Ordered left→right so related families neighbour each other.
+    const familyOrder = [
+      'tbox_Client',
+      'tbox_Provenance',
+      'tbox_SessionStructure',
+      'tbox_CognitiveModel',
+    ];
+
+    // Subtree width = max(node, sum of children widths + gaps).
+    const subtreeW = {};
+    const measure = (id) => {
+      const kids = tboxChildrenMap[id] || [];
+      if (!kids.length) return subtreeW[id] = TBOX_W;
+      const inner = kids.reduce((s, k) => s + measure(k), 0) + CHILD_GAP * (kids.length - 1);
+      return subtreeW[id] = Math.max(TBOX_W, inner);
+    };
+    familyOrder.forEach(measure);
+
+    const positions = {};
+    // Place each family as a subtree; children spread under their parent.
+    const place = (id, xStart, depth) => {
+      const w = subtreeW[id];
+      positions[id] = { x: xStart + (w - TBOX_W) / 2, y: Y_TOP + depth * ROW_Y };
+      let cx = xStart;
+      for (const k of tboxChildrenMap[id] || []) {
+        place(k, cx, depth + 1);
+        cx += subtreeW[k] + CHILD_GAP;
+      }
+    };
+
+    let x = X_MARGIN;
+    for (const rootId of familyOrder) {
+      place(rootId, x, 0);
+      x += subtreeW[rootId] + FAMILY_GAP;
+    }
+
+    for (const [id, pos] of Object.entries(positions)) ui.canvasPositions[id] = pos;
+    delete ui.canvasPositions['tbox_OWL_Thing']; // abstract root — no visual value
+  }
+
+  // Group ABox nodes by which Problem instance they connect to (transitively
+  // through any edge, undirected). Nodes reachable from multiple Problems are
+  // assigned to whichever Problem's BFS reached them first. Nodes not reachable
+  // from any Problem land in `orphans`.
+  function computeProblemClusters() {
+    const problems = model.nodes.filter(n => n.label === 'Problem');
+    const adj = {};
+    for (const n of model.nodes) adj[n.id] = new Set();
+    for (const e of model.edges) {
+      adj[e.from]?.add(e.to);
+      adj[e.to]?.add(e.from);
+    }
+    const clusterOf = {};
+    for (const p of problems) {
+      const queue = [p.id];
+      while (queue.length) {
+        const id = queue.shift();
+        if (clusterOf[id]) continue;
+        clusterOf[id] = p.id;
+        for (const nb of adj[id] || []) if (!clusterOf[nb]) queue.push(nb);
+      }
+    }
+    const clusters = {};
+    for (const p of problems) clusters[p.id] = [];
+    const orphans = [];
+    for (const n of model.nodes) {
+      const cid = clusterOf[n.id];
+      if (cid) clusters[cid].push(n.id);
+      else orphans.push(n.id);
+    }
+    return { clusters, orphans, problems };
+  }
+
+  // Lay ABox nodes out beneath the TBox tree, grouped by Problem cluster.
+  // Each cluster uses a BFS-from-Problem layered layout, and clusters are
+  // spread horizontally with big gaps so their backdrop rectangles don't
+  // collide.
+  function layoutProblemClusters() {
+    const { clusters, orphans, problems } = computeProblemClusters();
+    const NODE_W = 150, NODE_H = 60;
+    const NODE_GAP_X = 55;   // sibling gap in the same layer
+    const NODE_GAP_Y = 110;  // between BFS layers — must be tall enough for the edge label to sit on the line without touching either node
+    const CLUSTER_GAP_X = 180;
+    const Y_ABOX = 500; // well below deepest TBox row
+    let x = 60;
+
+    const placeCluster = (rootId, memberIds) => {
+      if (!memberIds.length) return 0;
+      const memberSet = new Set(memberIds);
+      const layer = { [rootId]: 0 };
+      const queue = [rootId];
+      while (queue.length) {
+        const id = queue.shift();
+        for (const e of model.edges) {
+          const nb = e.from === id ? e.to : (e.to === id ? e.from : null);
+          if (nb && memberSet.has(nb) && layer[nb] === undefined) {
+            layer[nb] = layer[id] + 1;
+            queue.push(nb);
+          }
+        }
+      }
+      for (const id of memberIds) if (layer[id] === undefined) layer[id] = 0;
+      const byLayer = {};
+      for (const id of memberIds) (byLayer[layer[id]] = byLayer[layer[id]] || []).push(id);
+      const layerKeys = Object.keys(byLayer).map(Number).sort((a, b) => a - b);
+      const maxWide = Math.max(...layerKeys.map(k => byLayer[k].length));
+      const clusterW = Math.max(NODE_W, maxWide * NODE_W + (maxWide - 1) * NODE_GAP_X);
+      for (const l of layerKeys) {
+        const nodes = byLayer[l];
+        const totalW = nodes.length * NODE_W + (nodes.length - 1) * NODE_GAP_X;
+        const startX = x + (clusterW - totalW) / 2;
+        const yy = Y_ABOX + l * (NODE_H + NODE_GAP_Y);
+        nodes.forEach((id, i) => {
+          ui.canvasPositions[id] = { x: startX + i * (NODE_W + NODE_GAP_X), y: yy };
+        });
+      }
+      return clusterW;
+    };
+
+    for (const p of problems) {
+      const w = placeCluster(p.id, clusters[p.id]);
+      if (w > 0) x += w + CLUSTER_GAP_X;
+    }
+
+    if (orphans.length) {
+      const cols = Math.min(3, orphans.length);
+      orphans.forEach((id, i) => {
+        ui.canvasPositions[id] = {
+          x: x + (i % cols) * (NODE_W + NODE_GAP_X),
+          y: Y_ABOX + Math.floor(i / cols) * (NODE_H + NODE_GAP_Y),
+        };
+      });
+    }
+  }
+
+  // Fit + center the viewport on everything currently on the canvas. Needs the
+  // DOM to be laid out — call inside a rAF after renderCanvas.
+  function centerViewportOnContent() {
+    const rects = [];
+    canvas.querySelectorAll('[data-id]').forEach(child => {
+      const id = child.dataset.id;
+      const pos = ui.canvasPositions[id];
+      if (pos) rects.push({ x: pos.x, y: pos.y, w: child.offsetWidth, h: child.offsetHeight });
+    });
+    if (!rects.length) return;
+    const minX = Math.min(...rects.map(r => r.x));
+    const minY = Math.min(...rects.map(r => r.y));
+    const maxX = Math.max(...rects.map(r => r.x + r.w));
+    const maxY = Math.max(...rects.map(r => r.y + r.h));
+    const contentW = maxX - minX;
+    const contentH = maxY - minY;
+    const vpW = viewport.clientWidth;
+    const vpH = viewport.clientHeight;
+    const pad = 80;
+    const fitScale = Math.min((vpW - pad) / contentW, (vpH - pad) / contentH);
+    ui.view.scale = Math.max(0.4, Math.min(1, fitScale));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    ui.view.panX = vpW / 2 - cx * ui.view.scale;
+    ui.view.panY = vpH / 2 - cy * ui.view.scale;
+    applyTransform();
+    markDirty();
+    renderEdges();
+  }
+
+  const tboxBtn = q('#toggletbox');
+  const syncTBoxBtn = () => {
+    tboxBtn.textContent = ui.showTBox ? 'Hide TBox' : 'Show TBox';
+    tboxBtn.classList.toggle('active', ui.showTBox);
+  };
+  syncTBoxBtn();
+
+  tboxBtn.onclick = () => {
+    if (!ui.showTBox) {
+      // Show → snapshot the current ABox layout so the labeling positions
+      // survive the schema-view re-layout, then re-layout for TBox view.
+      ui.aboxSnapshot = {};
+      for (const n of model.nodes) {
+        const p = ui.canvasPositions[n.id];
+        if (p) ui.aboxSnapshot[n.id] = { x: p.x, y: p.y };
+      }
+      ui.showTBox = true;
+      layoutOntology();
+      layoutProblemClusters();
+    } else {
+      // Hide → restore the pre-TBox ABox positions so labeling flow isn't
+      // disrupted. Nodes added while TBox was shown keep their new positions.
+      ui.showTBox = false;
+      if (ui.aboxSnapshot) {
+        for (const [id, pos] of Object.entries(ui.aboxSnapshot)) {
+          if (model.nodes.some(n => n.id === id)) ui.canvasPositions[id] = pos;
+        }
+      }
+    }
+    syncTBoxBtn(); markDirty(); renderCanvas();
+    requestAnimationFrame(centerViewportOnContent);
+  };
   viewport.addEventListener('wheel', (e) => {
     e.preventDefault();
     ui.view.scale = Math.min(2, Math.max(0.4, ui.view.scale - e.deltaY * 0.001));
@@ -283,14 +591,62 @@ export async function renderLabeler(root, sessionId) {
   }
 
   // ── Canvas nodes ──────────────────────────────────────────────────────────
+  function makeDraggable(d, id, pos) {
+    let dragging = false, sx, sy, ox, oy, moved = false;
+    d.onmousedown = (e) => {
+      if (linking) return;
+      dragging = true; moved = false; sx = e.clientX; sy = e.clientY;
+      ox = pos.x; oy = pos.y; e.stopPropagation(); e.preventDefault();
+    };
+    const move = (e) => {
+      if (!dragging) return;
+      pos.x = ox + (e.clientX - sx) / ui.view.scale;
+      pos.y = oy + (e.clientY - sy) / ui.view.scale;
+      moved = true;
+      d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
+      renderEdges();
+    };
+    const up = () => {
+      if (dragging && moved) { ui.canvasPositions[id] = pos; markDirty(); }
+      dragging = false;
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+
   function renderCanvas() {
     canvas.innerHTML = '';
+
+    // TBox class nodes (ontology upper-schema). Hidden by default; toggle via
+    // the "Show TBox" button. Manual classes reuse their colour so instance ↔
+    // class link is obvious; abstract classes are neutral.
+    if (ui.showTBox) for (const t of TBOX_NODES) {
+      if (t.id === 'tbox_OWL_Thing') continue; // abstract root — not drawn
+      const pos = ui.canvasPositions[t.id];
+      if (!pos) continue;
+      const isManual = NODE_CLASSES.includes(t.name);
+      const d = document.createElement('div');
+      d.className = 'node tbox' + (isManual ? '' : ' abstract');
+      d.dataset.id = t.id;
+      d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
+      if (isManual) {
+        const col = CLASS_COLORS[t.name];
+        d.style.background = col.bg; d.style.color = col.text; d.style.borderColor = col.border;
+      }
+      d.innerHTML = `<div class="row" style="gap:5px">${isManual ? badge(CLASS_SHAPES[t.name], 'rgba(0,0,0,0.35)') : ''}
+        <span class="cls">CLASS</span></div><div class="cap">${escapeHtml(t.name)}</div>`;
+      makeDraggable(d, t.id, pos);
+      canvas.appendChild(d);
+    }
+
+    // ABox instance nodes (user annotations).
     for (const n of model.nodes) {
       const col = CLASS_COLORS[n.label] || { bg: '#ccc', border: '#999', text: '#000' };
       const pos = ui.canvasPositions[n.id] || { x: 200, y: 200 };
       const d = document.createElement('div');
       d.className = 'node' + (selected === n.id ? ' selected' : '') +
         (linking && linking.toClasses.includes(n.label) && n.id !== linking.fromId ? ' link-target' : '');
+      d.dataset.id = n.id;
       d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
       d.style.background = col.bg; d.style.color = col.text; d.style.borderColor = col.border;
       d.innerHTML = `<div class="row" style="gap:5px">${badge(CLASS_SHAPES[n.label], 'rgba(0,0,0,0.35)')}
@@ -301,27 +657,7 @@ export async function renderLabeler(root, sessionId) {
         if (linking) { tryCompleteLink(n); return; }
         selected = n.id; panelMode = 'inspector'; evidenceMode = false; renderAll();
       };
-      // drag (zoom-aware)
-      let dragging = false, sx, sy, ox, oy, moved = false;
-      d.onmousedown = (e) => {
-        if (linking) return;
-        dragging = true; moved = false; sx = e.clientX; sy = e.clientY;
-        ox = pos.x; oy = pos.y; e.stopPropagation(); e.preventDefault();
-      };
-      const move = (e) => {
-        if (!dragging) return;
-        pos.x = ox + (e.clientX - sx) / ui.view.scale;
-        pos.y = oy + (e.clientY - sy) / ui.view.scale;
-        moved = true;
-        d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
-        renderEdges();
-      };
-      const up = () => {
-        if (dragging && moved) { ui.canvasPositions[n.id] = pos; markDirty(); }
-        dragging = false;
-      };
-      window.addEventListener('mousemove', move);
-      window.addEventListener('mouseup', up);
+      makeDraggable(d, n.id, pos);
       canvas.appendChild(d);
     }
     requestAnimationFrame(renderEdges);
@@ -336,29 +672,100 @@ export async function renderLabeler(root, sessionId) {
     return { x: cx + dx * s, y: cy + dy * s };
   }
 
+  // Problem-cluster backdrops: one uniform tint for every cluster. Each rect
+  // carries a "Problem: <caption>" label so clusters remain distinguishable
+  // without needing to encode identity in colour.
+  const CLUSTER_TINT = '#64748b'; // slate — neutral, works on any node colour
+  function renderProblemClusterBackdrops(rects) {
+    const { clusters, problems } = computeProblemClusters();
+    let out = '';
+    for (const p of problems) {
+      const memberRects = clusters[p.id].map(id => rects[id]).filter(Boolean);
+      if (!memberRects.length) continue;
+      const pad = 20;
+      const minX = Math.min(...memberRects.map(r => r.x)) - pad;
+      const minY = Math.min(...memberRects.map(r => r.y)) - pad - 12; // room for label
+      const maxX = Math.max(...memberRects.map(r => r.x + r.w)) + pad;
+      const maxY = Math.max(...memberRects.map(r => r.y + r.h)) + pad;
+      const cap = escapeHtml(caption(p)).slice(0, 40);
+      out += `<rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="16"
+        fill="${CLUSTER_TINT}" fill-opacity="0.07" stroke="${CLUSTER_TINT}" stroke-opacity="0.45" stroke-dasharray="6,5" stroke-width="1.4"/>`;
+      out += `<text x="${minX + 14}" y="${minY + 16}" font-size="11" font-weight="700"
+        fill="${CLUSTER_TINT}" fill-opacity="0.95">Problem: ${cap}</text>`;
+    }
+    return out;
+  }
+
   function renderEdges() {
     const rects = {};
-    model.nodes.forEach((n, i) => {
-      const child = canvas.children[i];
-      const pos = ui.canvasPositions[n.id];
-      if (child && pos) rects[n.id] = { x: pos.x, y: pos.y, w: child.offsetWidth, h: child.offsetHeight };
+    canvas.querySelectorAll('[data-id]').forEach(child => {
+      const id = child.dataset.id;
+      const pos = ui.canvasPositions[id];
+      if (pos) rects[id] = { x: pos.x, y: pos.y, w: child.offsetWidth, h: child.offsetHeight };
     });
-    let out = `<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-      <path d="M0,0 L7,3 L0,6 Z" fill="var(--text-muted)"/></marker></defs>`;
-    for (const e of model.edges) {
-      const ra = rects[e.from], rb = rects[e.to];
-      if (!ra || !rb) continue;
+
+    const drawEdge = (fromId, toId, label, opts) => {
+      const ra = rects[fromId], rb = rects[toId];
+      if (!ra || !rb) return '';
       const ca = { x: ra.x + ra.w / 2, y: ra.y + ra.h / 2 };
       const cb = { x: rb.x + rb.w / 2, y: rb.y + rb.h / 2 };
       const p1 = anchor(ra, cb.x, cb.y), p2 = anchor(rb, ca.x, ca.y);
       const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
-      const w = e.type.length * 6 + 8;
-      out += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"
-        stroke="var(--text-muted)" stroke-width="1.5" marker-end="url(#arrow)"/>
-        <rect x="${mx - w/2}" y="${my - 8}" width="${w}" height="14" rx="3"
-          fill="var(--surface-0)" opacity="0.9"/>
-        <text x="${mx}" y="${my + 3}" font-size="10" fill="var(--text-secondary)"
-          text-anchor="middle">${e.type}</text>`;
+      const stroke = opts.stroke || 'var(--text-muted)';
+      const marker = opts.marker || 'arrow';
+      const strokeWidth = opts.strokeWidth || 1.5;
+      const dash = opts.dash ? `stroke-dasharray="${opts.dash}"` : '';
+      const labelColor = opts.labelColor || 'var(--text-secondary)';
+      const labelFont = opts.labelFontSize || 10;
+      const labelBg = opts.labelBg || 'var(--surface-0)';
+      const labelBgOpacity = opts.labelBgOpacity || 0.9;
+      const labelWeight = opts.labelWeight || 'normal';
+      let s = `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"
+        stroke="${stroke}" stroke-width="${strokeWidth}" ${dash} marker-end="url(#${marker})"/>`;
+      if (label) {
+        const w = label.length * (labelFont * 0.62) + 10;
+        s += `<rect x="${mx - w/2}" y="${my - labelFont + 1}" width="${w}" height="${labelFont + 4}" rx="3"
+          fill="${labelBg}" opacity="${labelBgOpacity}" stroke="${stroke}" stroke-opacity="0.5"/>
+          <text x="${mx}" y="${my + 3}" font-size="${labelFont}" font-weight="${labelWeight}"
+          fill="${labelColor}" text-anchor="middle">${label}</text>`;
+      }
+      return s;
+    };
+
+    let out = `<defs>
+      <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="var(--text-muted)"/></marker>
+      <marker id="arrow-schema" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="var(--border-strong)"/></marker>
+    </defs>`;
+
+    // Problem-cluster backdrops drawn behind everything else. Only visible
+    // in TBox/schema view — in ABox-only view the graph is compact enough
+    // that boxes would just add clutter.
+    if (ui.showTBox) out = renderProblemClusterBackdrops(rects) + out;
+
+    // TBox SUB_CLASS_OF hierarchy (drawn first, sits underneath).
+    if (ui.showTBox) {
+      const schemaOpts = { stroke: 'var(--border-strong)', dash: '5,4', marker: 'arrow-schema', labelColor: 'var(--text-muted)' };
+      for (const e of TBOX_EDGES) {
+        out += drawEdge(e.from, e.to, 'SUB_CLASS_OF', schemaOpts);
+      }
+      // INSTANCE_OF: each ABox node → its TBox class (UI-only, not exported).
+      const instOpts = { stroke: 'var(--border-strong)', dash: '2,3', marker: 'arrow-schema', labelColor: 'var(--text-muted)' };
+      for (const n of model.nodes) {
+        const tboxId = nameToTBoxId[n.label];
+        if (tboxId) out += drawEdge(n.id, tboxId, 'INSTANCE_OF', instOpts);
+      }
+    }
+    // User-annotated ABox → ABox relations — bold and dark so they stand out
+    // against the muted TBox structure.
+    const userEdgeOpts = {
+      stroke: 'var(--text-primary)', strokeWidth: 2.2, marker: 'arrow',
+      labelColor: 'var(--text-primary)', labelFontSize: 11, labelWeight: 600,
+      labelBg: 'var(--surface-2)', labelBgOpacity: 1,
+    };
+    for (const e of model.edges) {
+      out += drawEdge(e.from, e.to, e.type, userEdgeOpts);
     }
     svg.innerHTML = out;
   }
