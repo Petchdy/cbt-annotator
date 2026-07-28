@@ -81,6 +81,10 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-bg);
 }
+textarea.autogrow {
+  resize: none; overflow: hidden;
+  min-height: 34px; line-height: 1.4;
+}
 label { font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 3px; }
 
 .row { display: flex; align-items: center; gap: 10px; }
@@ -169,8 +173,13 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
 .turn .meta { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
 .turn .text { font-size: 12px; line-height: 1.4; }
 .turn.evidence { background: var(--accent-bg); border-left-color: var(--accent); }
+.turn.evidence-neighbor {
+  background: var(--surface-2);
+  border-left: 2px dashed var(--accent);
+}
+.turn.focus-dim { opacity: 0.35; }
 .turn.clickable { cursor: pointer; }
-.turn.clickable:hover { background: var(--surface-2); }
+.turn.clickable:hover { background: var(--surface-2); opacity: 1; }
 
 .viewport {
   flex: 1; position: relative; overflow: hidden; cursor: grab;
@@ -191,6 +200,63 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
   box-shadow: 0 0 0 4px var(--accent-bg);
 }
 .node.focus-dim { opacity: 0.32; filter: saturate(0.5); }
+.node.reviewed-correct { box-shadow: 0 0 0 3px #10b981; }
+.node.reviewed-wrong   { box-shadow: 0 0 0 3px #dc2626; }
+.node.reviewed-fixed   { box-shadow: 0 0 0 3px #f59e0b; }
+.node.reviewed-correct::after,
+.node.reviewed-wrong::after,
+.node.reviewed-fixed::after {
+  position: absolute; top: -10px; right: -10px;
+  min-width: 22px; height: 22px; line-height: 22px; text-align: center;
+  padding: 0 4px;
+  color: #fff; border-radius: 12px;
+  font-size: 13px; font-weight: 800;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  border: 2px solid #fff;
+}
+.node.reviewed-correct::after { content: '✓'; background: #10b981; }
+.node.reviewed-wrong::after   { content: '✕'; background: #dc2626; }
+.node.reviewed-fixed::after   { content: '🔧'; background: #f59e0b; font-size: 11px; }
+
+.review-btns {
+  display: inline-flex; border: 1px solid var(--border-strong);
+  border-radius: 5px; overflow: hidden;
+}
+.review-btn {
+  background: var(--surface-2); color: var(--text-secondary);
+  border: none; padding: 3px 9px; font-size: 12px; font-weight: 700;
+  cursor: pointer; line-height: 1;
+}
+.review-btn + .review-btn { border-left: 1px solid var(--border-strong); }
+.review-btn:hover { background: var(--surface-1); }
+.review-btn.correct.on { background: #10b981; color: #fff; }
+.review-btn.fixed.on   { background: #f59e0b; color: #fff; }
+.review-btn.wrong.on   { background: #dc2626; color: #fff; }
+
+.icon-btn.revedge { font-weight: 700; }
+.icon-btn.revedge.correct.on { color: #fff; background: #10b981; border-radius: 4px; }
+.icon-btn.revedge.fixed.on   { color: #fff; background: #f59e0b; border-radius: 4px; }
+.icon-btn.revedge.wrong.on   { color: #fff; background: #dc2626; border-radius: 4px; }
+
+.review-summary { margin-bottom: 14px; }
+.review-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 11px; }
+.review-label { min-width: 42px; color: var(--text-secondary); }
+.review-count {
+  min-width: 110px; text-align: right; font-variant-numeric: tabular-nums;
+  color: var(--text-muted); font-size: 10px;
+}
+.review-tag { display: inline-block; padding: 0 4px; border-radius: 3px; font-weight: 700; font-size: 10px; margin-left: 2px; }
+.review-tag.correct { background: #d1fae5; color: #065f46; }
+.review-tag.wrong   { background: #fee2e2; color: #991b1b; }
+.review-tag.fixed   { background: #fef3c7; color: #92400e; }
+.review-bar {
+  flex: 1; height: 8px; background: var(--surface-2);
+  border-radius: 4px; overflow: hidden; display: flex;
+}
+.review-bar-fill { height: 100%; transition: width 120ms ease; }
+.review-bar-fill.correct { background: #10b981; }
+.review-bar-fill.wrong   { background: #dc2626; }
+.review-bar-fill.fixed   { background: #f59e0b; }
 
 .node.tbox {
   width: 140px; padding: 6px 8px;
@@ -290,6 +356,12 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
   padding: 6px 8px; border-radius: 6px; margin-bottom: 5px; font-size: 12px;
 }
 .coverage-row .lbl { display: flex; align-items: center; gap: 6px; }
+.coverage-row.missing-row {
+  flex-direction: column; align-items: flex-start; gap: 2px;
+}
+.coverage-row .missing-fields {
+  font-size: 10px; font-weight: 500; opacity: 0.85;
+}
 .warn { background: var(--warning-bg); color: var(--warning); }
 .ok { background: var(--surface-2); }
 

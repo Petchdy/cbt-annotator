@@ -27,11 +27,24 @@ export async function renderLabeler(root, sessionId) {
   ui.canvasPositions = ui.canvasPositions || {};
   ui.view = ui.view || { panX: 40, panY: 20, scale: 1 };
   ui.highlights = ui.highlights || {};
+  ui.reviewedNodes = ui.reviewedNodes || {}; // { [nodeId]: 'correct' | 'wrong' | 'fixed' } — workflow-only, not exported
+  ui.reviewedEdges = ui.reviewedEdges || {}; // { [edgeKeyOf(e)]: 'correct' | 'wrong' | 'fixed' }
+  // Migrate legacy values from earlier iterations of this feature: `true` (v1)
+  // and `'fix'` (v2) both meant "reviewed as problematic" and become `'wrong'`.
+  for (const id in ui.reviewedNodes) {
+    const v = ui.reviewedNodes[id];
+    if (v === true || v === 'fix') ui.reviewedNodes[id] = 'wrong';
+  }
+  for (const k in ui.reviewedEdges) {
+    const v = ui.reviewedEdges[k];
+    if (v === true || v === 'fix') ui.reviewedEdges[k] = 'wrong';
+  }
   if (typeof ui.showTBox !== 'boolean') ui.showTBox = false;
   let status = data.status;
   let language = SUPPORTED_LANGUAGES.includes(data.language) ? data.language : 'english';
   let notesText = (Array.isArray(data.notes) ? data.notes : []).join('\n');
   const isAdmin = state.user?.role === 'admin';
+  const isTherapist = !isAdmin; // non-admin annotators (expert role) are the "therapist" side
 
   // ensure every node has a stable id and a position
   let idCounter = Date.now();
@@ -50,6 +63,8 @@ export async function renderLabeler(root, sessionId) {
 
   // ── View state ────────────────────────────────────────────────────────────
   let selected = null;      // node id
+  let selectedTurn = null;  // transcript turn number highlighted from a transcript click
+  let quietFocus = false;   // when true, selecting a node skips the 1-hop neighbour halo + canvas/transcript dimming — used for "jump to node" from the coverage panel
   let panelMode = 'coverage';
   let evidenceMode = false;
   let linking = null;       // { fromId, type, toClasses, edgeProps } while choosing a target
@@ -214,6 +229,8 @@ export async function renderLabeler(root, sessionId) {
     // Reset canvas layout — old positions belong to the previous annotation.
     ui.canvasPositions = {};
     ui.aboxSnapshot = null;
+    ui.reviewedNodes = {};
+    ui.reviewedEdges = {};
     layoutProblemClusters();
 
     // Meta bits that carry over if present.
@@ -562,7 +579,9 @@ export async function renderLabeler(root, sessionId) {
     if (justDragged) { justDragged = false; return; } // drag-release, not a real deselect click
     if (e.target === viewport || e.target === world || e.target === canvas || e.target === svg) {
       if (linking) { linking = null; updateHint(); renderCanvas(); }
-      else if (selected) { selected = null; panelMode = 'coverage'; renderAll(); }
+      else if (selected || selectedTurn !== null) {
+        selected = null; selectedTurn = null; quietFocus = false; panelMode = 'coverage'; renderAll();
+      }
     }
   });
 
@@ -600,33 +619,119 @@ export async function renderLabeler(root, sessionId) {
     return { ...n, properties };
   }
 
+  // Stable key for reviewed-edges map — (type, from, to) triple is unique
+  // because tryCompleteLink() rejects duplicates. Node ids survive reloads.
+  const edgeKeyOf = (e) => `${e.type}|${e.from}|${e.to}`;
+
+  // Resize a textarea to fit its contents. `height = auto` first so shrink
+  // works too; then set to scrollHeight so it grows to whatever's inside.
+  const sizeToContent = (el) => {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  };
+
+  // Which non-optional CLASS_PROPS on this node are still empty?
+  // Booleans are excluded (they always carry a defined state).
+  // showIf-gated fields are excluded when their gate isn't matched.
+  function missingRequiredFields(n) {
+    const missing = [];
+    for (const f of CLASS_PROPS[n.label] || []) {
+      if (f.optional || f.kind === 'bool') continue;
+      if (f.showIf && !propMatchesShowIf(n.properties || {}, f.showIf)) continue;
+      const v = n.properties?.[f.key];
+      if (f.kind === 'multi-enum') {
+        if (!Array.isArray(v) || v.length === 0) missing.push(f.label);
+      } else if (v === undefined || v === null || v === '') {
+        missing.push(f.label);
+      }
+    }
+    return missing;
+  }
+
+  // Pan the viewport so a specific node sits in the middle. Preserves zoom.
+  function centerViewportOnNode(id) {
+    const pos = ui.canvasPositions[id];
+    if (!pos) return;
+    const child = canvas.querySelector(`[data-id="${id}"]`);
+    const w = child?.offsetWidth || 150;
+    const h = child?.offsetHeight || 60;
+    const cx = pos.x + w / 2;
+    const cy = pos.y + h / 2;
+    ui.view.panX = viewport.clientWidth / 2 - cx * ui.view.scale;
+    ui.view.panY = viewport.clientHeight / 2 - cy * ui.view.scale;
+    applyTransform();
+  }
+
   // ── Transcript ────────────────────────────────────────────────────────────
   function renderTranscript() {
     const host = q('#transcript');
-    const active = (panelMode === 'inspector' && selected)
-      ? (model.nodes.find(n => n.id === selected)?.evidence || []) : [];
+    // Focus tiers in the transcript:
+    //   primary   — the "anchor" turns (selected node's evidence, or the
+    //               clicked turn itself in turn-focus mode)
+    //   neighbour — the other evidence turns of the focus set's members
+    //   focus-dim — everything else, when any focus is active
+    const nodeInFocus = panelMode === 'inspector' && selected;
+    const turnInFocus = selectedTurn !== null;
+    // Quiet-focus still dims other rows so the selected node's evidence stands
+    // out — it just skips the neighbour-evidence tint (handled below).
+    const inFocus = nodeInFocus || turnInFocus;
+    const primary = new Set();
+    const neighbour = new Set();
+    if (turnInFocus) {
+      primary.add(selectedTurn);
+      for (const n of model.nodes) {
+        const ev = n.evidence || [];
+        if (ev.includes(selectedTurn)) {
+          ev.forEach(t => { if (t !== selectedTurn) neighbour.add(t); });
+        }
+      }
+    } else if (nodeInFocus) {
+      const selectedNode = model.nodes.find(n => n.id === selected);
+      (selectedNode?.evidence || []).forEach(t => primary.add(t));
+      if (!quietFocus) {
+        const focus = computeFocusSet();
+        if (focus) {
+          for (const id of focus) {
+            if (id === selected) continue;
+            const n = model.nodes.find(x => x.id === id);
+            (n?.evidence || []).forEach(t => { if (!primary.has(t)) neighbour.add(t); });
+          }
+        }
+      }
+    }
     host.innerHTML = data.transcript.map((t, i) => {
       const turn = i;
-      const isEv = active.includes(turn);
       const ranges = Array.isArray(ui.highlights[turn]) ? ui.highlights[turn] : [];
-      return `<div class="turn ${isEv ? 'evidence' : ''} ${evidenceMode ? 'clickable' : ''}" data-turn="${turn}">
+      const cls = ['turn'];
+      if (primary.has(turn)) cls.push('evidence');
+      else if (neighbour.has(turn)) cls.push('evidence-neighbor');
+      else if (inFocus) cls.push('focus-dim');
+      cls.push('clickable');
+      return `<div class="${cls.join(' ')}" data-turn="${turn}">
         <div class="meta">turn ${turn} · ${t.speaker}</div>
         <div class="text">${renderHighlighted(t.text, ranges, highlightColorFor)}</div>
       </div>`;
     }).join('');
-    if (evidenceMode && selected) {
-      host.querySelectorAll('.turn').forEach(row => {
-        row.onclick = () => {
+    host.querySelectorAll('.turn').forEach(row => {
+      row.onclick = () => {
+        const turn = +row.dataset.turn;
+        // Evidence-editing mode wins when it's active — click toggles
+        // membership on the currently-selected node's evidence array.
+        if (evidenceMode && selected) {
           const n = model.nodes.find(x => x.id === selected);
-          const turn = +row.dataset.turn;
           n.evidence = n.evidence || [];
           const idx = n.evidence.indexOf(turn);
           if (idx > -1) n.evidence.splice(idx, 1); else n.evidence.push(turn);
           n.evidence.sort((a, b) => a - b);
           markDirty(); renderTranscript(); renderInspector();
-        };
-      });
-    }
+          return;
+        }
+        // Otherwise: turn-focus toggle. Clicking the same turn again clears.
+        selectedTurn = (selectedTurn === turn) ? null : turn;
+        if (selectedTurn !== null) { selected = null; quietFocus = false; panelMode = 'coverage'; }
+        renderAll();
+      };
+    });
   }
 
   // ── Canvas nodes ──────────────────────────────────────────────────────────
@@ -656,11 +761,23 @@ export async function renderLabeler(root, sessionId) {
     window.addEventListener('mouseup', up);
   }
 
-  // Focus set: when a node is selected, the set of ids that share an edge
-  // with it (both directions). TBox nodes are always dimmed alongside
-  // unrelated ABox nodes. Returns null when nothing is selected → no dimming.
+  // Focus set: which node ids should render at full intensity.
+  // - Node focus (selected != null): the selected node + its 1-hop neighbours.
+  // - Turn focus (selectedTurn != null): every node whose evidence includes
+  //   the clicked transcript turn.
+  // Returns null when nothing is focused → no dimming.
   function computeFocusSet() {
+    if (selectedTurn !== null) {
+      const set = new Set();
+      for (const n of model.nodes) {
+        if ((n.evidence || []).includes(selectedTurn)) set.add(n.id);
+      }
+      return set;
+    }
     if (!selected) return null;
+    // Quiet focus (jumped from coverage) — set contains only the target so
+    // everything else lands in focus-dim; no 1-hop neighbours light up.
+    if (quietFocus) return new Set([selected]);
     const set = new Set([selected]);
     for (const e of model.edges) {
       if (e.from === selected) set.add(e.to);
@@ -706,8 +823,10 @@ export async function renderLabeler(root, sessionId) {
       const col = CLASS_COLORS[n.label] || { bg: '#ccc', border: '#999', text: '#000' };
       const pos = ui.canvasPositions[n.id] || { x: 200, y: 200 };
       const d = document.createElement('div');
+      const revState = ui.reviewedNodes[n.id]; // 'correct' | 'wrong' | 'fixed' | undefined
       d.className = 'node' + (selected === n.id ? ' selected' : '') +
         (linking && linking.toClasses.includes(n.label) && n.id !== linking.fromId ? ' link-target' : '') +
+        (revState ? ` reviewed-${revState}` : '') +
         focusClass(focus, n.id);
       d.dataset.id = n.id;
       d.style.left = pos.x + 'px'; d.style.top = pos.y + 'px';
@@ -718,7 +837,7 @@ export async function renderLabeler(root, sessionId) {
       d.onclick = (e) => {
         e.stopPropagation();
         if (linking) { tryCompleteLink(n); return; }
-        selected = n.id; panelMode = 'inspector'; evidenceMode = false; renderAll();
+        selected = n.id; selectedTurn = null; quietFocus = false; panelMode = 'inspector'; evidenceMode = false; renderAll();
       };
       makeDraggable(d, n.id, pos);
       canvas.appendChild(d);
@@ -773,6 +892,7 @@ export async function renderLabeler(root, sessionId) {
     const focus = computeFocusSet();
     const edgeState = (fromId, toId) => {
       if (!focus) return 'normal';
+      if (quietFocus) return 'dim'; // fade every edge — nothing is "connected" in quiet mode
       return (fromId === selected || toId === selected) ? 'active' : 'dim';
     };
 
@@ -852,7 +972,20 @@ export async function renderLabeler(root, sessionId) {
       labelBg: 'var(--surface-2)', labelBgOpacity: 1,
     };
     for (const e of model.edges) {
-      out += drawEdge(e.from, e.to, e.type, userEdgeOpts, edgeState(e.from, e.to));
+      const rev = ui.reviewedEdges[edgeKeyOf(e)]; // 'correct' | 'wrong' | 'fixed' | undefined
+      let label = e.type;
+      let opts = userEdgeOpts;
+      if (rev === 'correct') {
+        label = `✓ ${e.type}`;
+        opts = { ...userEdgeOpts, labelBg: '#d1fae5', labelColor: '#065f46' };
+      } else if (rev === 'wrong') {
+        label = `✕ ${e.type}`;
+        opts = { ...userEdgeOpts, labelBg: '#fee2e2', labelColor: '#991b1b' };
+      } else if (rev === 'fixed') {
+        label = `🔧 ${e.type}`;
+        opts = { ...userEdgeOpts, labelBg: '#fef3c7', labelColor: '#92400e' };
+      }
+      out += drawEdge(e.from, e.to, label, opts, edgeState(e.from, e.to));
     }
     svg.innerHTML = out;
   }
@@ -871,6 +1004,10 @@ export async function renderLabeler(root, sessionId) {
     const edge = { _eid: 'e' + (idCounter++), type: linking.type, from: linking.fromId, to: targetNode.id, evidence: [] };
     if (linking.edgeProps && linking.edgeProps.length) edge.properties = {};
     model.edges.push(edge);
+    // Any edge the therapist (non-admin annotator) adds is a correction to the
+    // gold graph — auto-mark it as 'fixed' so the review roll-ups distinguish
+    // therapist-added corrections from pre-existing edges.
+    if (isTherapist) ui.reviewedEdges[edgeKeyOf(edge)] = 'fixed';
     linking = null; updateHint(); markDirty(); renderAll();
   }
   function updateHint() {
@@ -920,9 +1057,20 @@ export async function renderLabeler(root, sessionId) {
     if (panelMode === 'inspector' && selected) {
       const n = model.nodes.find(x => x.id === selected);
       if (!n) { panelMode = 'coverage'; selected = null; return renderInspector(); }
+      const nodeState = ui.reviewedNodes[n.id]; // 'correct' | 'wrong' | 'fixed' | undefined
       head.innerHTML = `<span class="row" style="gap:8px">
           <button class="icon-btn" id="pback">←</button>${n.label}</span>
-        <button class="delete-node-btn" id="delnode" title="Delete node">Delete</button>`;
+        <span class="row" style="gap:6px">
+          <span class="review-btns" role="group" aria-label="Review status">
+            <button class="review-btn correct ${nodeState === 'correct' ? 'on' : ''}" id="reviewcorrect"
+              title="Mark as correct">✓</button>
+            <button class="review-btn fixed ${nodeState === 'fixed' ? 'on' : ''}" id="reviewfixed"
+              title="Mark as fixed (was wrong, now repaired)">🔧</button>
+            <button class="review-btn wrong ${nodeState === 'wrong' ? 'on' : ''}" id="reviewwrong"
+              title="Mark as wrong (shouldn't be here)">✕</button>
+          </span>
+          <button class="delete-node-btn" id="delnode" title="Delete node">Delete</button>
+        </span>`;
 
       const props = CLASS_PROPS[n.label] || [];
       n.properties = n.properties || {};
@@ -936,9 +1084,16 @@ export async function renderLabeler(root, sessionId) {
       const edgesHtml = touching.length ? touching.map(e => {
         const other = model.nodes.find(x => x.id === (e.from === n.id ? e.to : e.from));
         const dir = e.from === n.id ? '→' : '←';
+        const rev = ui.reviewedEdges[edgeKeyOf(e)];
         return `<div class="edge-item">
           <span>${dir} ${e.type} ${dir} ${escapeHtml(other ? caption(other) : '?')}</span>
-          <button class="icon-btn deledge" data-eid="${e._eid}" title="Delete edge">✕</button>
+          <span class="row" style="gap:4px">
+            <button class="icon-btn revedge correct ${rev === 'correct' ? 'on' : ''}" data-eid="${e._eid}" data-mark="correct"
+              title="Mark as correct">✓</button>
+            <button class="icon-btn revedge wrong ${rev === 'wrong' ? 'on' : ''}" data-eid="${e._eid}" data-mark="wrong"
+              title="Mark as wrong">✕</button>
+            <button class="icon-btn deledge" data-eid="${e._eid}" title="Delete edge">🗑</button>
+          </span>
         </div>`;
       }).join('') : '<div class="muted" style="font-size:11px">none</div>';
 
@@ -982,7 +1137,13 @@ export async function renderLabeler(root, sessionId) {
           renderCanvas();       // caption may change
           renderInspector();    // conditional fields may appear/disappear
         };
-        if (f.kind === 'text') input.oninput = () => { n.properties[f.key] = input.value; markDirty(); };
+        if (f.kind === 'text') {
+          input.oninput = () => {
+            n.properties[f.key] = input.value; markDirty();
+            if (input.classList.contains('autogrow')) sizeToContent(input);
+          };
+          if (input.classList.contains('autogrow')) sizeToContent(input);
+        }
       });
       body.querySelectorAll('.multi-enum').forEach(box => {
         const key = box.dataset.prop;
@@ -1017,15 +1178,44 @@ export async function renderLabeler(root, sessionId) {
       }, { once: true });
 
       q('#pback').onclick = () => { selected = null; panelMode = 'coverage'; evidenceMode = false; renderAll(); };
+      // Three independent buttons — each toggles its own state on/off.
+      const setNode = (want) => {
+        if (ui.reviewedNodes[n.id] === want) delete ui.reviewedNodes[n.id];
+        else ui.reviewedNodes[n.id] = want;
+        markDirty(); renderAll();
+      };
+      q('#reviewcorrect').onclick = () => setNode('correct');
+      q('#reviewfixed').onclick   = () => setNode('fixed');
+      q('#reviewwrong').onclick   = () => setNode('wrong');
       q('#delnode').onclick = () => {
+        // remove the node itself, any edges touching it, and any reviewed marks that referenced it
+        const gone = new Set(model.edges.filter(e => e.from === n.id || e.to === n.id).map(edgeKeyOf));
+        for (const k of gone) delete ui.reviewedEdges[k];
+        delete ui.reviewedNodes[n.id];
         model.edges = model.edges.filter(e => e.from !== n.id && e.to !== n.id);
         model.nodes = model.nodes.filter(x => x.id !== n.id);
         delete ui.canvasPositions[n.id];
         selected = null; panelMode = 'coverage'; markDirty(); renderAll();
       };
       body.querySelector('#evtoggle').onclick = () => { evidenceMode = !evidenceMode; updateHint(); renderAll(); };
+      body.querySelectorAll('.revedge').forEach(b => {
+        b.onclick = () => {
+          const e = model.edges.find(x => x._eid === b.dataset.eid);
+          if (!e) return;
+          const k = edgeKeyOf(e);
+          const want = b.dataset.mark; // 'correct' | 'fixed' | 'wrong'
+          if (ui.reviewedEdges[k] === want) delete ui.reviewedEdges[k];
+          else ui.reviewedEdges[k] = want;
+          markDirty(); renderAll();
+        };
+      });
       body.querySelectorAll('.deledge').forEach(b => {
-        b.onclick = () => { model.edges = model.edges.filter(e => e._eid !== b.dataset.eid); markDirty(); renderAll(); };
+        b.onclick = () => {
+          const e = model.edges.find(x => x._eid === b.dataset.eid);
+          if (e) delete ui.reviewedEdges[edgeKeyOf(e)];
+          model.edges = model.edges.filter(x => x._eid !== b.dataset.eid);
+          markDirty(); renderAll();
+        };
       });
       body.querySelectorAll('.addrel').forEach(b => {
         b.onclick = () => {
@@ -1039,16 +1229,74 @@ export async function renderLabeler(root, sessionId) {
       NODE_CLASSES.forEach(c => counts[c] = model.nodes.filter(n => n.label === c).length);
       const orphans = model.nodes.filter(n =>
         !model.edges.some(e => e.from === n.id || e.to === n.id));
+      const incomplete = model.nodes
+        .map(n => ({ node: n, missing: missingRequiredFields(n) }))
+        .filter(x => x.missing.length > 0);
       // turns with no node grounded to them
       const grounded = new Set();
       model.nodes.forEach(n => (n.evidence || []).forEach(t => grounded.add(t)));
       const unlinked = data.transcript.map((_, i) => i).filter(t => !grounded.has(t));
+
+      // Reviewed rollups. Keys can go stale after import/delete — count only
+      // marks whose id/edge-key still corresponds to a live node/edge.
+      const liveNodeIds = new Set(model.nodes.map(n => n.id));
+      const liveEdgeKeys = new Set(model.edges.map(edgeKeyOf));
+      const nodeCorrect = Object.entries(ui.reviewedNodes).filter(([id, v]) => v === 'correct' && liveNodeIds.has(id)).length;
+      const nodeWrong   = Object.entries(ui.reviewedNodes).filter(([id, v]) => v === 'wrong'   && liveNodeIds.has(id)).length;
+      const nodeFixed   = Object.entries(ui.reviewedNodes).filter(([id, v]) => v === 'fixed'   && liveNodeIds.has(id)).length;
+      const edgeCorrect = Object.entries(ui.reviewedEdges).filter(([k, v]) => v === 'correct' && liveEdgeKeys.has(k)).length;
+      const edgeWrong   = Object.entries(ui.reviewedEdges).filter(([k, v]) => v === 'wrong'   && liveEdgeKeys.has(k)).length;
+      const edgeFixed   = Object.entries(ui.reviewedEdges).filter(([k, v]) => v === 'fixed'   && liveEdgeKeys.has(k)).length;
+      const nodesTotal = model.nodes.length;
+      const edgesTotal = model.edges.length;
+      const pct = (n, t) => t ? Math.round(100 * n / t) : 0;
+      const nCorrectPct = pct(nodeCorrect, nodesTotal);
+      const nWrongPct   = pct(nodeWrong,   nodesTotal);
+      const nFixedPct   = pct(nodeFixed,   nodesTotal);
+      const eCorrectPct = pct(edgeCorrect, edgesTotal);
+      const eWrongPct   = pct(edgeWrong,   edgesTotal);
+      const eFixedPct   = pct(edgeFixed,   edgesTotal);
 
       body.innerHTML = `
         ${isAdmin ? `<div class="section">
           <label>Session notes <span class="muted">(one per line)</span></label>
           <textarea id="notes" rows="4" placeholder="Notes about this annotation…">${escapeHtml(notesText)}</textarea>
         </div>` : ''}
+        <div class="section review-summary">
+          <label>Reviewed</label>
+          <div class="review-row">
+            <span class="review-label">Nodes</span>
+            <div class="review-bar">
+              <div class="review-bar-fill correct" style="width:${nCorrectPct}%"></div>
+              <div class="review-bar-fill fixed"   style="width:${nFixedPct}%"></div>
+              <div class="review-bar-fill wrong"   style="width:${nWrongPct}%"></div>
+            </div>
+            <span class="review-count">
+              <span class="review-tag correct">✓ ${nodeCorrect}</span>
+              <span class="review-tag fixed">🔧 ${nodeFixed}</span>
+              <span class="review-tag wrong">✕ ${nodeWrong}</span>
+              / ${nodesTotal}
+            </span>
+          </div>
+          <div class="review-row">
+            <span class="review-label">Edges</span>
+            <div class="review-bar">
+              <div class="review-bar-fill correct" style="width:${eCorrectPct}%"></div>
+              <div class="review-bar-fill fixed"   style="width:${eFixedPct}%"></div>
+              <div class="review-bar-fill wrong"   style="width:${eWrongPct}%"></div>
+            </div>
+            <span class="review-count">
+              <span class="review-tag correct">✓ ${edgeCorrect}</span>
+              <span class="review-tag fixed">🔧 ${edgeFixed}</span>
+              <span class="review-tag wrong">✕ ${edgeWrong}</span>
+              / ${edgesTotal}
+            </span>
+          </div>
+          <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
+            <button class="small" id="markall">Mark all correct</button>
+            <button class="small" id="clearall">Clear all</button>
+          </div>
+        </div>
         <div style="margin-bottom:14px">
           ${NODE_CLASSES.map(c => `
             <div class="coverage-row ${counts[c] === 0 ? 'warn' : 'ok'}">
@@ -1066,6 +1314,17 @@ export async function renderLabeler(root, sessionId) {
           </div>
         </div>
         <div class="section">
+          <label>Nodes missing required fields (${incomplete.length})</label>
+          <div style="margin-top:4px">
+            ${incomplete.length ? incomplete.map(({ node, missing }) =>
+              `<div class="coverage-row warn missing-row" style="cursor:pointer" data-id="${node.id}">
+                <span>${node.label}: ${escapeHtml(caption(node))}</span>
+                <span class="missing-fields">missing: ${missing.map(m => escapeHtml(m)).join(', ')}</span>
+              </div>`).join('')
+              : '<div class="muted" style="font-size:11px">none</div>'}
+          </div>
+        </div>
+        <div class="section">
           <label>Turns with no grounded node (${unlinked.length})</label>
           <div class="row" style="flex-wrap:wrap;gap:4px;margin-top:4px">
             ${unlinked.length ? unlinked.map(t => `<span class="chip">turn ${t}</span>`).join('')
@@ -1076,8 +1335,26 @@ export async function renderLabeler(root, sessionId) {
       const notesEl = body.querySelector('#notes');
       if (notesEl) notesEl.oninput = () => { notesText = notesEl.value; markDirty(); };
       body.querySelectorAll('[data-id]').forEach(r => {
-        r.onclick = () => { selected = r.dataset.id; panelMode = 'inspector'; renderAll(); };
+        r.onclick = () => {
+          const id = r.dataset.id;
+          selected = id; selectedTurn = null; quietFocus = true; panelMode = 'inspector';
+          renderAll();
+          // Pan to the node after the render commits so offsetWidth is valid.
+          requestAnimationFrame(() => centerViewportOnNode(id));
+        };
       });
+      const markAllBtn = body.querySelector('#markall');
+      if (markAllBtn) markAllBtn.onclick = () => {
+        ui.reviewedNodes = Object.fromEntries(model.nodes.map(n => [n.id, 'correct']));
+        ui.reviewedEdges = Object.fromEntries(model.edges.map(e => [edgeKeyOf(e), 'correct']));
+        markDirty(); renderAll();
+      };
+      const clearAllBtn = body.querySelector('#clearall');
+      if (clearAllBtn) clearAllBtn.onclick = () => {
+        ui.reviewedNodes = {};
+        ui.reviewedEdges = {};
+        markDirty(); renderAll();
+      };
     }
   }
 
@@ -1112,7 +1389,7 @@ export async function renderLabeler(root, sessionId) {
     const long = ['content', 'description', 'statement', 'taskDescription', 'context'].includes(f.key);
     return `<label>${f.label}${f.optional ? ' <span class="muted">(optional)</span>' : ''}</label>` +
       (long
-        ? `<textarea data-prop="${f.key}" rows="2">${escapeHtml(val || '')}</textarea>`
+        ? `<textarea data-prop="${f.key}" class="autogrow" rows="1">${escapeHtml(val || '')}</textarea>`
         : `<input data-prop="${f.key}" value="${escapeAttr(val || '')}"/>`);
   }
 
