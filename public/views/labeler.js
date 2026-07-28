@@ -70,7 +70,74 @@ export async function renderLabeler(root, sessionId) {
   let linking = null;       // { fromId, type, toClasses, edgeProps } while choosing a target
   let dirty = false;
   let justDragged = false;  // set by makeDraggable when a drag moves; swallowed by the next viewport click so drag-release doesn't deselect
-  const markDirty = () => { dirty = true; updateSaveState(); };
+
+  // ── Undo / Redo ───────────────────────────────────────────────────────────
+  // Snapshot the full editable state and swap it in on undo/redo. Snapshots
+  // are JSON clones — cheap for the graph sizes this app deals with, and
+  // avoids reasoning about which mutation type is happening at each call site.
+  const undoStack = [];
+  const redoStack = [];
+  let restoring = false;    // suppresses markDirty side-effects during a restore
+  let currentSnap;          // last-committed state; the "before" of the next mutation
+  const HISTORY_LIMIT = 100;
+
+  function snapshot() {
+    return JSON.stringify({
+      nodes: model.nodes, edges: model.edges,
+      reviewedNodes: ui.reviewedNodes, reviewedEdges: ui.reviewedEdges,
+      canvasPositions: ui.canvasPositions, highlights: ui.highlights,
+      notesText, status, language,
+    });
+  }
+  function restore(snap) {
+    const s = JSON.parse(snap);
+    model.nodes = s.nodes;
+    model.edges = s.edges;
+    // re-assign editor helper _eid so the inspector delete/mark buttons still resolve
+    for (const e of model.edges) if (!e._eid) e._eid = 'e' + (idCounter++);
+    ui.reviewedNodes = s.reviewedNodes;
+    ui.reviewedEdges = s.reviewedEdges;
+    ui.canvasPositions = s.canvasPositions;
+    ui.highlights = s.highlights;
+    notesText = s.notesText;
+    status = s.status;
+    language = s.language;
+    // Selection may reference an id that no longer exists after undo.
+    if (selected && !model.nodes.some(n => n.id === selected)) {
+      selected = null; panelMode = 'coverage';
+    }
+    const langSel = q('#lang'); if (langSel) langSel.value = language;
+    const statusSel = q('#status'); if (statusSel) statusSel.value = status;
+  }
+  function markDirty() {
+    if (restoring) { dirty = true; updateSaveState(); return; }
+    undoStack.push(currentSnap);
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+    currentSnap = snapshot();
+    dirty = true; updateSaveState(); syncUndoRedoButtons();
+  }
+  function syncUndoRedoButtons() {
+    const u = q('#undo'), r = q('#redo');
+    if (u) u.disabled = undoStack.length === 0;
+    if (r) r.disabled = redoStack.length === 0;
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(currentSnap);
+    currentSnap = undoStack.pop();
+    restoring = true; restore(currentSnap); restoring = false;
+    dirty = true; updateSaveState(); syncUndoRedoButtons();
+    renderAll();
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(currentSnap);
+    currentSnap = redoStack.pop();
+    restoring = true; restore(currentSnap); restoring = false;
+    dirty = true; updateSaveState(); syncUndoRedoButtons();
+    renderAll();
+  }
 
   // ── Shell ─────────────────────────────────────────────────────────────────
   const el = document.createElement('div');
@@ -92,6 +159,8 @@ export async function renderLabeler(root, sessionId) {
           `<option ${status === s ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
       <span id="savestate" class="muted">Saved</span>
+      <button id="undo" title="Undo (Ctrl+Z)" disabled>↶</button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
       <button id="import" title="Import an exported annotation JSON into this session">Import</button>
       <input type="file" id="importfile" accept="application/json,.json" hidden>
       <button id="export">Export</button>
@@ -183,6 +252,21 @@ export async function renderLabeler(root, sessionId) {
     dirty = false; updateSaveState();
   }
   q('#save').onclick = () => save().catch(e => alert('Save failed: ' + e.message));
+  q('#undo').onclick = () => undo();
+  q('#redo').onclick = () => redo();
+  window.addEventListener('keydown', (e) => {
+    const meta = e.ctrlKey || e.metaKey;
+    if (!meta) return;
+    // ignore shortcuts while typing into text inputs
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.key === 'z' || e.key === 'Z') {
+      e.preventDefault();
+      if (e.shiftKey) redo(); else undo();
+    } else if (e.key === 'y' || e.key === 'Y') {
+      e.preventDefault(); redo();
+    }
+  });
   q('#readtranscript').onclick = () => openTranscriptModal(root, data.title, data.transcript, {
     highlights: ui.highlights,
     onChange: () => { markDirty(); renderTranscript(); },
@@ -1004,10 +1088,17 @@ export async function renderLabeler(root, sessionId) {
     const edge = { _eid: 'e' + (idCounter++), type: linking.type, from: linking.fromId, to: targetNode.id, evidence: [] };
     if (linking.edgeProps && linking.edgeProps.length) edge.properties = {};
     model.edges.push(edge);
-    // Any edge the therapist (non-admin annotator) adds is a correction to the
-    // gold graph — auto-mark it as 'fixed' so the review roll-ups distinguish
-    // therapist-added corrections from pre-existing edges.
-    if (isTherapist) ui.reviewedEdges[edgeKeyOf(edge)] = 'fixed';
+    // Cascade from endpoints first: a relation into/out of a wrong node is
+    // itself suspect. This overrides the therapist-auto-fixed default below.
+    const endpointWrong = ui.reviewedNodes[edge.from] === 'wrong' || ui.reviewedNodes[edge.to] === 'wrong';
+    if (endpointWrong) {
+      ui.reviewedEdges[edgeKeyOf(edge)] = 'wrong';
+    } else if (isTherapist) {
+      // Any edge the therapist (non-admin annotator) adds is a correction to
+      // the gold graph — auto-mark 'fixed' so review roll-ups distinguish
+      // therapist-added corrections from pre-existing edges.
+      ui.reviewedEdges[edgeKeyOf(edge)] = 'fixed';
+    }
     linking = null; updateHint(); markDirty(); renderAll();
   }
   function updateHint() {
@@ -1179,9 +1270,23 @@ export async function renderLabeler(root, sessionId) {
 
       q('#pback').onclick = () => { selected = null; panelMode = 'coverage'; evidenceMode = false; renderAll(); };
       // Three independent buttons — each toggles its own state on/off.
+      // Marking a node as 'wrong' cascades to every incident edge: relations
+      // that involve a wrong node are also suspect. Toggling off 'wrong' does
+      // NOT auto-revert the edges — the therapist may want to keep individual
+      // edge marks after the node itself is re-evaluated.
       const setNode = (want) => {
-        if (ui.reviewedNodes[n.id] === want) delete ui.reviewedNodes[n.id];
-        else ui.reviewedNodes[n.id] = want;
+        if (ui.reviewedNodes[n.id] === want) {
+          delete ui.reviewedNodes[n.id];
+        } else {
+          ui.reviewedNodes[n.id] = want;
+          if (want === 'wrong') {
+            for (const e of model.edges) {
+              if (e.from === n.id || e.to === n.id) {
+                ui.reviewedEdges[edgeKeyOf(e)] = 'wrong';
+              }
+            }
+          }
+        }
         markDirty(); renderAll();
       };
       q('#reviewcorrect').onclick = () => setNode('correct');
@@ -1401,6 +1506,10 @@ export async function renderLabeler(root, sessionId) {
     updateHint();
     applyTransform();
   }
+  // Baseline snapshot for undo history — future markDirty() pushes this
+  // "before" state onto undoStack before recording the mutated state.
+  currentSnap = snapshot();
+  syncUndoRedoButtons();
   renderAll();
 }
 

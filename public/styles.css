@@ -110,6 +110,11 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
   background: var(--surface-1); flex-shrink: 0;
 }
 .topbar .brand { font-weight: 500; }
+.topbar button#undo, .topbar button#redo {
+  padding: 6px 10px; font-size: 15px; line-height: 1;
+  min-width: 34px;
+}
+.topbar button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Session list ── */
 .list-wrap { flex: 1; overflow-y: auto; }
