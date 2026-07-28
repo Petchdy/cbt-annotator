@@ -29,6 +29,11 @@ export async function renderLabeler(root, sessionId) {
   ui.highlights = ui.highlights || {};
   ui.reviewedNodes = ui.reviewedNodes || {}; // { [nodeId]: 'correct' | 'wrong' | 'fixed' } — workflow-only, not exported
   ui.reviewedEdges = ui.reviewedEdges || {}; // { [edgeKeyOf(e)]: 'correct' | 'wrong' | 'fixed' }
+  // Expert-added items are locked at 'fixed'. The review buttons are hidden
+  // for them in the inspector and the wrong-cascade skips them. Only delete
+  // actually removes them.
+  ui.expertAddedNodes = ui.expertAddedNodes || {}; // { [nodeId]: true }
+  ui.expertAddedEdges = ui.expertAddedEdges || {}; // { [edgeKeyOf(e)]: true }
   // Migrate legacy values from earlier iterations of this feature: `true` (v1)
   // and `'fix'` (v2) both meant "reviewed as problematic" and become `'wrong'`.
   for (const id in ui.reviewedNodes) {
@@ -44,7 +49,7 @@ export async function renderLabeler(root, sessionId) {
   let language = SUPPORTED_LANGUAGES.includes(data.language) ? data.language : 'english';
   let notesText = (Array.isArray(data.notes) ? data.notes : []).join('\n');
   const isAdmin = state.user?.role === 'admin';
-  const isTherapist = !isAdmin; // non-admin annotators (expert role) are the "therapist" side
+  const isExpert = state.user?.role === 'expert'; // expert-added edges are auto-marked 'fixed'
 
   // ensure every node has a stable id and a position
   let idCounter = Date.now();
@@ -85,6 +90,7 @@ export async function renderLabeler(root, sessionId) {
     return JSON.stringify({
       nodes: model.nodes, edges: model.edges,
       reviewedNodes: ui.reviewedNodes, reviewedEdges: ui.reviewedEdges,
+      expertAddedNodes: ui.expertAddedNodes, expertAddedEdges: ui.expertAddedEdges,
       canvasPositions: ui.canvasPositions, highlights: ui.highlights,
       notesText, status, language,
     });
@@ -97,6 +103,8 @@ export async function renderLabeler(root, sessionId) {
     for (const e of model.edges) if (!e._eid) e._eid = 'e' + (idCounter++);
     ui.reviewedNodes = s.reviewedNodes;
     ui.reviewedEdges = s.reviewedEdges;
+    ui.expertAddedNodes = s.expertAddedNodes || {};
+    ui.expertAddedEdges = s.expertAddedEdges || {};
     ui.canvasPositions = s.canvasPositions;
     ui.highlights = s.highlights;
     notesText = s.notesText;
@@ -161,9 +169,10 @@ export async function renderLabeler(root, sessionId) {
       <span id="savestate" class="muted">Saved</span>
       <button id="undo" title="Undo (Ctrl+Z)" disabled>↶</button>
       <button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+      ${isAdmin ? `
       <button id="import" title="Import an exported annotation JSON into this session">Import</button>
       <input type="file" id="importfile" accept="application/json,.json" hidden>
-      <button id="export">Export</button>
+      <button id="export">Export</button>` : ''}
       <button class="primary" id="save">Save</button>
     </div>
     <div class="labeler-body">
@@ -315,6 +324,8 @@ export async function renderLabeler(root, sessionId) {
     ui.aboxSnapshot = null;
     ui.reviewedNodes = {};
     ui.reviewedEdges = {};
+    ui.expertAddedNodes = {};
+    ui.expertAddedEdges = {};
     layoutProblemClusters();
 
     // Meta bits that carry over if present.
@@ -341,42 +352,46 @@ export async function renderLabeler(root, sessionId) {
     requestAnimationFrame(centerViewportOnContent);
   }
 
-  q('#import').onclick = () => q('#importfile').click();
-  q('#importfile').onchange = async (ev) => {
-    const file = ev.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const json = JSON.parse(text);
-      const nCurrent = model.nodes.length + model.edges.length;
-      if (nCurrent > 0 && !confirm(
-        `Importing "${file.name}" will replace the current ${model.nodes.length} node(s) and ${model.edges.length} edge(s) in this session. Continue?`
-      )) {
+  // Import / Export are admin-only — buttons aren't rendered on the therapist
+  // side, so their handlers must be gated to avoid querying nulls.
+  if (isAdmin) {
+    q('#import').onclick = () => q('#importfile').click();
+    q('#importfile').onchange = async (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        const nCurrent = model.nodes.length + model.edges.length;
+        if (nCurrent > 0 && !confirm(
+          `Importing "${file.name}" will replace the current ${model.nodes.length} node(s) and ${model.edges.length} edge(s) in this session. Continue?`
+        )) {
+          ev.target.value = '';
+          return;
+        }
+        importAnnotation(json);
+      } catch (err) {
+        alert('Import failed: ' + err.message);
+      } finally {
         ev.target.value = '';
+      }
+    };
+
+    q('#export').onclick = async () => {
+      try {
+        if (dirty) await save();
+      } catch (e) {
+        alert('Save failed: ' + e.message);
         return;
       }
-      importAnnotation(json);
-    } catch (err) {
-      alert('Import failed: ' + err.message);
-    } finally {
-      ev.target.value = '';
-    }
-  };
-
-  q('#export').onclick = async () => {
-    try {
-      if (dirty) await save();
-    } catch (e) {
-      alert('Save failed: ' + e.message);
-      return;
-    }
-    const a = document.createElement('a');
-    a.href = `/api/sessions/${sessionId}/export`;
-    a.download = `${sessionId}_annotation.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  };
+      const a = document.createElement('a');
+      a.href = `/api/sessions/${sessionId}/export`;
+      a.download = `${sessionId}_annotation.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    };
+  }
   q('#back').onclick = () => {
     if (dirty) {
       confirmLeave(root, () => save().then(() => navigate({ name: 'list' })),
@@ -1090,14 +1105,15 @@ export async function renderLabeler(root, sessionId) {
     model.edges.push(edge);
     // Cascade from endpoints first: a relation into/out of a wrong node is
     // itself suspect. This overrides the therapist-auto-fixed default below.
-    const endpointWrong = ui.reviewedNodes[edge.from] === 'wrong' || ui.reviewedNodes[edge.to] === 'wrong';
-    if (endpointWrong) {
-      ui.reviewedEdges[edgeKeyOf(edge)] = 'wrong';
-    } else if (isTherapist) {
-      // Any edge the therapist (non-admin annotator) adds is a correction to
-      // the gold graph — auto-mark 'fixed' so review roll-ups distinguish
-      // therapist-added corrections from pre-existing edges.
-      ui.reviewedEdges[edgeKeyOf(edge)] = 'fixed';
+    const key = edgeKeyOf(edge);
+    if (isExpert) {
+      // Expert-added edges are always locked at 'fixed' regardless of endpoint
+      // state — they're repairs to the annotation.
+      ui.reviewedEdges[key] = 'fixed';
+      ui.expertAddedEdges[key] = true;
+    } else {
+      const endpointWrong = ui.reviewedNodes[edge.from] === 'wrong' || ui.reviewedNodes[edge.to] === 'wrong';
+      if (endpointWrong) ui.reviewedEdges[key] = 'wrong';
     }
     linking = null; updateHint(); markDirty(); renderAll();
   }
@@ -1134,6 +1150,12 @@ export async function renderLabeler(root, sessionId) {
         const cy = (-ui.view.panY + viewport.clientHeight / 2) / ui.view.scale - 20;
         model.nodes.push({ id, label: cls, parent: sessionId, properties: {}, evidence: [] });
         ui.canvasPositions[id] = { x: Math.round(cx), y: Math.round(cy) };
+        // Expert-added nodes are locked as 'fixed' additions — no review-button
+        // overrides, only delete removes them.
+        if (isExpert) {
+          ui.reviewedNodes[id] = 'fixed';
+          ui.expertAddedNodes[id] = true;
+        }
         selected = id; panelMode = 'inspector'; menu.remove(); markDirty(); renderAll();
       };
     });
@@ -1149,17 +1171,21 @@ export async function renderLabeler(root, sessionId) {
       const n = model.nodes.find(x => x.id === selected);
       if (!n) { panelMode = 'coverage'; selected = null; return renderInspector(); }
       const nodeState = ui.reviewedNodes[n.id]; // 'correct' | 'wrong' | 'fixed' | undefined
+      const nodeLocked = !!ui.expertAddedNodes[n.id];
+      const reviewControl = nodeLocked
+        ? `<span class="review-locked" title="Expert-added — locked as fixed. Only delete is available.">🔧 Locked</span>`
+        : `<span class="review-btns" role="group" aria-label="Review status">
+             <button class="review-btn correct ${nodeState === 'correct' ? 'on' : ''}" id="reviewcorrect"
+               title="Mark as correct">✓</button>
+             <button class="review-btn fixed ${nodeState === 'fixed' ? 'on' : ''}" id="reviewfixed"
+               title="Mark as fixed (was wrong, now repaired)">🔧</button>
+             <button class="review-btn wrong ${nodeState === 'wrong' ? 'on' : ''}" id="reviewwrong"
+               title="Mark as wrong (shouldn't be here)">✕</button>
+           </span>`;
       head.innerHTML = `<span class="row" style="gap:8px">
           <button class="icon-btn" id="pback">←</button>${n.label}</span>
         <span class="row" style="gap:6px">
-          <span class="review-btns" role="group" aria-label="Review status">
-            <button class="review-btn correct ${nodeState === 'correct' ? 'on' : ''}" id="reviewcorrect"
-              title="Mark as correct">✓</button>
-            <button class="review-btn fixed ${nodeState === 'fixed' ? 'on' : ''}" id="reviewfixed"
-              title="Mark as fixed (was wrong, now repaired)">🔧</button>
-            <button class="review-btn wrong ${nodeState === 'wrong' ? 'on' : ''}" id="reviewwrong"
-              title="Mark as wrong (shouldn't be here)">✕</button>
-          </span>
+          ${reviewControl}
           <button class="delete-node-btn" id="delnode" title="Delete node">Delete</button>
         </span>`;
 
@@ -1176,13 +1202,17 @@ export async function renderLabeler(root, sessionId) {
         const other = model.nodes.find(x => x.id === (e.from === n.id ? e.to : e.from));
         const dir = e.from === n.id ? '→' : '←';
         const rev = ui.reviewedEdges[edgeKeyOf(e)];
+        const edgeLocked = !!ui.expertAddedEdges[edgeKeyOf(e)];
+        const reviewCtrls = edgeLocked
+          ? `<span class="review-locked" title="Expert-added edge — locked as fixed. Only delete is available.">🔧</span>`
+          : `<button class="icon-btn revedge correct ${rev === 'correct' ? 'on' : ''}" data-eid="${e._eid}" data-mark="correct"
+               title="Mark as correct">✓</button>
+             <button class="icon-btn revedge wrong ${rev === 'wrong' ? 'on' : ''}" data-eid="${e._eid}" data-mark="wrong"
+               title="Mark as wrong">✕</button>`;
         return `<div class="edge-item">
           <span>${dir} ${e.type} ${dir} ${escapeHtml(other ? caption(other) : '?')}</span>
           <span class="row" style="gap:4px">
-            <button class="icon-btn revedge correct ${rev === 'correct' ? 'on' : ''}" data-eid="${e._eid}" data-mark="correct"
-              title="Mark as correct">✓</button>
-            <button class="icon-btn revedge wrong ${rev === 'wrong' ? 'on' : ''}" data-eid="${e._eid}" data-mark="wrong"
-              title="Mark as wrong">✕</button>
+            ${reviewCtrls}
             <button class="icon-btn deledge" data-eid="${e._eid}" title="Delete edge">🗑</button>
           </span>
         </div>`;
@@ -1281,22 +1311,30 @@ export async function renderLabeler(root, sessionId) {
           ui.reviewedNodes[n.id] = want;
           if (want === 'wrong') {
             for (const e of model.edges) {
-              if (e.from === n.id || e.to === n.id) {
-                ui.reviewedEdges[edgeKeyOf(e)] = 'wrong';
-              }
+              if (e.from !== n.id && e.to !== n.id) continue;
+              const k = edgeKeyOf(e);
+              // Expert-added edges are locked at 'fixed' — skip cascade.
+              if (ui.expertAddedEdges[k]) continue;
+              ui.reviewedEdges[k] = 'wrong';
             }
           }
         }
         markDirty(); renderAll();
       };
-      q('#reviewcorrect').onclick = () => setNode('correct');
-      q('#reviewfixed').onclick   = () => setNode('fixed');
-      q('#reviewwrong').onclick   = () => setNode('wrong');
+      if (!nodeLocked) {
+        q('#reviewcorrect').onclick = () => setNode('correct');
+        q('#reviewfixed').onclick   = () => setNode('fixed');
+        q('#reviewwrong').onclick   = () => setNode('wrong');
+      }
       q('#delnode').onclick = () => {
-        // remove the node itself, any edges touching it, and any reviewed marks that referenced it
+        // remove the node itself, any edges touching it, and any reviewed / expert-added marks that referenced it
         const gone = new Set(model.edges.filter(e => e.from === n.id || e.to === n.id).map(edgeKeyOf));
-        for (const k of gone) delete ui.reviewedEdges[k];
+        for (const k of gone) {
+          delete ui.reviewedEdges[k];
+          delete ui.expertAddedEdges[k];
+        }
         delete ui.reviewedNodes[n.id];
+        delete ui.expertAddedNodes[n.id];
         model.edges = model.edges.filter(e => e.from !== n.id && e.to !== n.id);
         model.nodes = model.nodes.filter(x => x.id !== n.id);
         delete ui.canvasPositions[n.id];
@@ -1309,15 +1347,24 @@ export async function renderLabeler(root, sessionId) {
           if (!e) return;
           const k = edgeKeyOf(e);
           const want = b.dataset.mark; // 'correct' | 'fixed' | 'wrong'
-          if (ui.reviewedEdges[k] === want) delete ui.reviewedEdges[k];
-          else ui.reviewedEdges[k] = want;
+          if (ui.reviewedEdges[k] === want) {
+            // Toggle off — expert-added edges snap back to their locked 'fixed' base.
+            if (ui.expertAddedEdges[k]) ui.reviewedEdges[k] = 'fixed';
+            else delete ui.reviewedEdges[k];
+          } else {
+            ui.reviewedEdges[k] = want;
+          }
           markDirty(); renderAll();
         };
       });
       body.querySelectorAll('.deledge').forEach(b => {
         b.onclick = () => {
           const e = model.edges.find(x => x._eid === b.dataset.eid);
-          if (e) delete ui.reviewedEdges[edgeKeyOf(e)];
+          if (e) {
+            const k = edgeKeyOf(e);
+            delete ui.reviewedEdges[k];
+            delete ui.expertAddedEdges[k];
+          }
           model.edges = model.edges.filter(x => x._eid !== b.dataset.eid);
           markDirty(); renderAll();
         };

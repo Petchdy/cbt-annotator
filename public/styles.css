@@ -237,6 +237,13 @@ label { font-size: 11px; color: var(--text-secondary); display: block; margin-bo
 .review-btn.correct.on { background: #10b981; color: #fff; }
 .review-btn.fixed.on   { background: #f59e0b; color: #fff; }
 .review-btn.wrong.on   { background: #dc2626; color: #fff; }
+.review-locked {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #fef3c7; color: #92400e;
+  border: 1px solid #f59e0b; border-radius: 5px;
+  padding: 3px 8px; font-size: 11px; font-weight: 700;
+  cursor: not-allowed;
+}
 
 .icon-btn.revedge { font-weight: 700; }
 .icon-btn.revedge.correct.on { color: #fff; background: #10b981; border-radius: 4px; }
